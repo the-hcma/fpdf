@@ -77,7 +77,8 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ## Commits, Stacking & Pull Requests
 
-- This project uses **Graphite** (`gt`) for branch stacking. All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
+- This project uses **Graphite** (`gt`) for branch stacking. All `gt` commands must be prefixed with `GRAPHITE_PROFILE=thehcma` (e.g. `GRAPHITE_PROFILE=thehcma gt submit`), or exported in the shell session before running any `gt` command.
+- All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
 - Never work directly on `main`. Always create a stack branch: `gt create -m "feat: description"`.
 - Keep each branch in the stack focused on exactly one logical change. Stacks should map 1-to-1 with milestones or sub-tasks from [PLAN.md](./PLAN.md).
 - Sync regularly: `gt sync` before starting new work; `gt restack` after upstream changes land.

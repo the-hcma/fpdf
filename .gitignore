@@ -1,0 +1,6 @@
+node_modules/
+dist/
+coverage/
+*.fpdf.json
+*.env
+.DS_Store

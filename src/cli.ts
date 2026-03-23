@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { writeFile, readFile } from 'node:fs/promises';
+import { exportPdf } from './exporter.js';
 import * as path from 'node:path';
 import { Command } from 'commander';
 import open from 'open';
@@ -106,10 +107,27 @@ export function buildProgram(): Command {
   program
     .command('export <jsonFile>')
     .description('Write filled values from a .fpdf.json back into a new PDF')
-    .action((...args: unknown[]) => {
-      void args;
-      logger.error('export command not yet implemented');
-      process.exit(1);
+    .option('-o, --output <path>', 'Output path (default: <name>-filled.pdf alongside the JSON)')
+    .action((jsonFile: string, opts: { output?: string }) => {
+      const run = async (): Promise<void> => {
+        const jsonPath = path.resolve(jsonFile);
+        const raw = await readFile(jsonPath, 'utf-8');
+        const doc = JSON.parse(raw) as FpdfDocument;
+        const outPath = opts.output
+          ? path.resolve(opts.output)
+          : path.join(
+              path.dirname(jsonPath),
+              `${path.basename(jsonPath, '.fpdf.json')}-filled.pdf`,
+            );
+        const filled = await exportPdf(doc.metadata.originalPdf, doc);
+        await writeFile(outPath, filled);
+        logger.info(`Wrote ${outPath}`);
+      };
+      run().catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(msg);
+        process.exit(1);
+      });
     });
 
   return program;

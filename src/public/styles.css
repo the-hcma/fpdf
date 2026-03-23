@@ -31,7 +31,8 @@ body {
 }
 
 #save,
-#toggle-fields {
+#toggle-fields,
+#export-pdf {
   font-size: 13px;
   padding: 4px 10px;
   border: 1px solid #aaa;
@@ -41,7 +42,8 @@ body {
 }
 
 #save:not(:disabled):hover,
-#toggle-fields:hover {
+#toggle-fields:hover,
+#export-pdf:hover {
   background: #e9e9e9;
 }
 

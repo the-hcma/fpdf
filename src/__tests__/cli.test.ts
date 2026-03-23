@@ -18,6 +18,10 @@ vi.mock('../server.js', () => ({
 
 vi.mock('open', () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 
+vi.mock('../exporter.js', () => ({
+  exportPdf: vi.fn(),
+}));
+
 vi.mock('node:fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   // Default: JSON file absent — fill tests that need it to exist override per-test.
@@ -73,26 +77,81 @@ describe('CLI program structure', () => {
     expect(program.commands).toHaveLength(3);
   });
 
-  describe('stub command actions emit an error and exit', () => {
+  describe('export command action', () => {
+    let infoSpy: MockInstance;
     let errorSpy: MockInstance;
     let exitSpy: MockInstance;
 
+    const mockDoc = {
+      metadata: {
+        version: '1.0',
+        originalPdf: '/abs/form.pdf',
+        pdfFilename: 'form.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+      },
+      pages: [],
+    };
+
     beforeEach(() => {
+      vi.clearAllMocks();
+      infoSpy = vi.spyOn(logger, 'info').mockReturnValue(undefined);
       errorSpy = vi.spyOn(logger, 'error').mockReturnValue(undefined);
-      exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null) => {
-        throw new Error('process.exit called');
-      });
+      exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation((_code?: string | number | null) => undefined as never);
     });
 
     afterEach(() => {
       vi.restoreAllMocks();
     });
 
-    it('export action logs error and exits', () => {
+    it('reads the json, calls exportPdf, and writes the output', async () => {
+      const { exportPdf } = await import('../exporter.js');
+      const { readFile, writeFile } = await import('node:fs/promises');
+      const filledBytes = new Uint8Array([37, 80, 68, 70]); // %PDF
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(exportPdf).mockResolvedValueOnce(filledBytes);
+
       const program = buildProgram();
-      program.exitOverride();
-      expect(() => program.parse(['node', 'fpdf', 'export', 'form.fpdf.json'])).toThrow();
-      expect(errorSpy).toHaveBeenCalledWith('export command not yet implemented');
+      program.parse(['node', 'fpdf', 'export', 'form.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(readFile).toHaveBeenCalledWith(expect.stringContaining('form.fpdf.json'), 'utf-8');
+      expect(exportPdf).toHaveBeenCalledWith('/abs/form.pdf', mockDoc);
+      expect(writeFile).toHaveBeenCalledWith(
+        expect.stringContaining('form-filled.pdf'),
+        filledBytes,
+      );
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('form-filled.pdf'));
+    });
+
+    it('respects the --output flag', async () => {
+      const { exportPdf } = await import('../exporter.js');
+      const { readFile, writeFile } = await import('node:fs/promises');
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(exportPdf).mockResolvedValueOnce(new Uint8Array());
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'export', 'form.fpdf.json', '--output', '/tmp/out.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(writeFile).toHaveBeenCalledWith('/tmp/out.pdf', expect.anything());
+    });
+
+    it('logs an error and exits when exportPdf rejects', async () => {
+      const { exportPdf } = await import('../exporter.js');
+      const { readFile } = await import('node:fs/promises');
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(exportPdf).mockRejectedValue(new Error('pdf locked'));
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'export', 'form.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('pdf locked');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });

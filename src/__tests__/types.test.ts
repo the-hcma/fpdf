@@ -6,10 +6,11 @@ describe('FpdfDocument shape', () => {
     const placement: Placement = { x: 10, y: 20, width: 100, height: 18 };
 
     const field: PdfField = {
-      id: 'field_0',
+      id: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
       name: 'FirstName',
       type: 'text',
       label: 'First Name',
+      displayName: 'First Name',
       placement,
       value: '',
       required: false,
@@ -45,10 +46,11 @@ describe('FpdfDocument shape', () => {
 
   it('accepts a checkbox field with a boolean value', () => {
     const field: PdfField = {
-      id: 'field_1',
+      id: 'b2c3d4e5-f6a7-8901-bcde-f12345678901',
       name: 'Agree',
       type: 'checkbox',
       label: 'I agree',
+      displayName: 'I agree',
       placement: { x: 10, y: 10, width: 12, height: 12 },
       value: true,
       required: true,
@@ -62,10 +64,11 @@ describe('FpdfDocument shape', () => {
 
   it('accepts a select field with options', () => {
     const field: PdfField = {
-      id: 'field_2',
+      id: 'c3d4e5f6-a7b8-9012-cdef-123456789012',
       name: 'Color',
       type: 'select',
       label: 'Favorite color',
+      displayName: 'Favorite color',
       placement: { x: 10, y: 10, width: 100, height: 20 },
       value: 'blue',
       required: false,

@@ -1,6 +1,9 @@
 #!/usr/bin/env node
+import { writeFile } from 'node:fs/promises';
+import * as path from 'node:path';
 import { Command } from 'commander';
 import { logger } from './logger.js';
+import { analyzePdf, AnalyzerError } from './analyzer.js';
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -21,10 +24,21 @@ export function buildProgram(): Command {
   program
     .command('analyze <file>')
     .description('Extract fields from a PDF and write a .fpdf.json file (no server)')
-    .action((...args: unknown[]) => {
-      void args;
-      logger.error('analyze command not yet implemented');
-      process.exit(1);
+    .action((file: string) => {
+      const run = async (): Promise<void> => {
+        const doc = await analyzePdf(file);
+        const outPath = path.join(
+          path.dirname(path.resolve(file)),
+          `${path.basename(file, path.extname(file))}.fpdf.json`,
+        );
+        await writeFile(outPath, JSON.stringify(doc, null, 2), 'utf-8');
+        logger.info(`Wrote ${outPath}`);
+      };
+      run().catch((err: unknown) => {
+        const msg = err instanceof AnalyzerError ? err.message : String(err);
+        logger.error(msg);
+        process.exit(1);
+      });
     });
 
   program

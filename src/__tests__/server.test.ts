@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { WebSocket } from 'ws';
+import { PDFDocument } from 'pdf-lib';
 import { startServer, type ServerHandle } from '../server.js';
 import type { FpdfDocument } from '../types.js';
 
@@ -60,9 +61,14 @@ beforeAll(async () => {
   const dir = path.join(tmpdir(), 'fpdf-server-tests');
   await mkdir(dir, { recursive: true });
 
-  // Write a minimal valid PDF (just enough bytes for the route to serve)
+  // Create a real pdf-lib PDF so /filled-pdf can export it
   pdfPath = path.join(dir, 'test.pdf');
-  await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([612, 792]);
+  const form = pdfDoc.getForm();
+  const tf = form.createTextField('firstName');
+  tf.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
+  await writeFile(pdfPath, await pdfDoc.save());
 
   jsonPath = path.join(dir, 'test.fpdf.json');
   await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
@@ -103,6 +109,25 @@ describe('startServer', () => {
       const res = await fetch(`${baseUrl}/pdf`);
       const text = await res.text();
       expect(text).toContain('%PDF');
+    });
+  });
+
+  describe('GET /filled-pdf', () => {
+    it('returns 200 with content-type application/pdf', async () => {
+      const res = await fetch(`${baseUrl}/filled-pdf`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('application/pdf');
+    });
+
+    it('returns a Content-Disposition header with the filled filename', async () => {
+      const res = await fetch(`${baseUrl}/filled-pdf`);
+      expect(res.headers.get('content-disposition')).toContain('test-filled.pdf');
+    });
+
+    it('returns valid PDF bytes', async () => {
+      const res = await fetch(`${baseUrl}/filled-pdf`);
+      const buf = await res.arrayBuffer();
+      expect(Buffer.from(buf).subarray(0, 4).toString()).toBe('%PDF');
     });
   });
 
@@ -358,6 +383,54 @@ describe('startServer', () => {
 });
 
 describe('startServer error paths', () => {
+  it('GET /filled-pdf returns 500 when the PDF file does not exist', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-server-filled-error-tests');
+    await mkdir(dir, { recursive: true });
+    const missingPdf = path.join(dir, 'missing.pdf');
+    const tmpJson = path.join(dir, 'test.fpdf.json');
+    await writeFile(tmpJson, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath: missingPdf, doc: MOCK_DOC, jsonPath: tmpJson });
+    try {
+      const res = await fetch(`${h.url}/filled-pdf`);
+      expect(res.status).toBe(500);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('logs a WS save error and keeps serving when writeFile fails', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-server-ws-write-error');
+    await mkdir(dir, { recursive: true });
+    const pdfDoc2 = await PDFDocument.create();
+    pdfDoc2.addPage([612, 792]);
+    const pdfFile = path.join(dir, 'test.pdf');
+    await writeFile(pdfFile, await pdfDoc2.save());
+
+    // jsonPath is a directory — writeFile(dir, ...) throws EISDIR
+    // so handleMessage().catch fires (server.ts line 159)
+    const h = await startServer({ pdfPath: pdfFile, doc: MOCK_DOC, jsonPath: dir });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(`${h.url.replace('http', 'ws')}/ws`);
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'save', doc: MOCK_DOC }));
+          // No ack will be sent because writeFile throws before ws.send
+          setTimeout(() => {
+            ws.close();
+            resolve();
+          }, 150);
+        });
+        ws.on('error', reject);
+      });
+      // Server must still be reachable after the error
+      const res = await fetch(`${h.url}/doc`);
+      expect(res.status).toBe(200);
+    } finally {
+      await h.close();
+    }
+  });
+
   it('GET /pdf returns 500 when the PDF file does not exist', async () => {
     const dir = path.join(tmpdir(), 'fpdf-server-error-tests');
     await mkdir(dir, { recursive: true });
@@ -369,6 +442,37 @@ describe('startServer error paths', () => {
     try {
       const res = await fetch(`${h.url}/pdf`);
       expect(res.status).toBe(500);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('handles a transiently absent JSON file gracefully (readFile catch)', async () => {
+    // Use an isolated server so the rename-back watcher event cannot bleed
+    // into any shared server's subsequent tests.
+    const dir = path.join(tmpdir(), 'fpdf-server-transient-json');
+    await mkdir(dir, { recursive: true });
+    const pdfDoc2 = await PDFDocument.create();
+    pdfDoc2.addPage([612, 792]);
+    const pdfFile = path.join(dir, 'test.pdf');
+    const tmpJson = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfFile, await pdfDoc2.save());
+    await writeFile(tmpJson, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath: pdfFile, doc: MOCK_DOC, jsonPath: tmpJson });
+    try {
+      const { rename } = await import('node:fs/promises');
+      const backup = `${tmpJson}.bak`;
+      // Rename the json file away — the watcher fires with the original filename,
+      // readFile throws ENOENT → the inner catch at server.ts:192 returns early.
+      await rename(tmpJson, backup);
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      // Server must still be alive (liveDoc in memory is unchanged)
+      const res = await fetch(`${h.url}/doc`);
+      expect(res.status).toBe(200);
+      // Restore the json file before closing the server
+      await rename(backup, tmpJson);
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
     } finally {
       await h.close();
     }

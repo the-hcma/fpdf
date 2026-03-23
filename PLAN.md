@@ -76,6 +76,30 @@ fpdf/
           "readOnly": false,
           "options": []
         }
+      ],
+      "textBlocks": [
+        {
+          "text": "Patient Information",
+          "placement": {
+            "x": 50.0,
+            "y": 720.0,
+            "width": 120.0,
+            "height": 14.0
+          },
+          "fontSize": 14.0,
+          "fontName": "TT1"
+        },
+        {
+          "text": "First Name",
+          "placement": {
+            "x": 50.0,
+            "y": 675.0,
+            "width": 60.0,
+            "height": 10.0
+          },
+          "fontSize": 10.0,
+          "fontName": "TT2"
+        }
       ]
     }
   ]
@@ -91,6 +115,14 @@ fpdf/
 - `options` is populated for dropdowns and radio groups
 - `value` is what the user fills in (string for text/select, boolean for checkboxes)
 - The file is human-editable: a user can fill in `value` fields directly in a text editor
+
+### textBlocks notes
+- `textBlocks` contains static text extracted from the page content stream — section headers, field labels, instructions — anything drawn as PDF text rather than an AcroForm widget
+- Each block is a logical line: adjacent `TextItem`s with the same `fontName`, fontSize within 0.5pt, and y-position within half the font size are merged into one block
+- `placement` uses the same PDF coordinate space (bottom-left origin) as `fields` — use proximity to associate a label block with nearby form fields
+- `fontSize` is in points, derived from the rendered glyph height as reported by `pdfjs-dist`
+- `fontName` is the PDF font resource name (e.g. `"TT1"`, `"g_d0_f1"`) — consistent within a document, useful to distinguish header fonts from body/label fonts
+- `textBlocks` is always present (never omitted), but may be an empty array if text extraction fails
 
 ---
 

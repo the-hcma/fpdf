@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { logger } from './logger.js';
+import { exportPdf } from './exporter.js';
 import type { FpdfDocument } from './types.js';
 
 export interface ServerOptions {
@@ -50,6 +51,22 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     run().catch((err: unknown) => {
       logger.error(`Failed to serve PDF: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: 'Failed to read PDF' });
+    });
+  });
+
+  // --- Filled PDF export ---
+  app.get('/filled-pdf', (_req, res) => {
+    const run = async (): Promise<void> => {
+      const filled = await exportPdf(pdfPath, liveDoc);
+      const filename = `${path.basename(pdfPath, path.extname(pdfPath))}-filled.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(filled.length));
+      res.end(Buffer.from(filled));
+    };
+    run().catch((err: unknown) => {
+      logger.error(`Failed to export PDF: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: 'Failed to export PDF' });
     });
   });
 

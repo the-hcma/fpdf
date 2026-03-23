@@ -4,6 +4,29 @@ Fill PDF forms interactively in your browser, then export a completed PDF — al
 
 `fpdf` spawns a local web server, renders your PDF via PDF.js, and overlays precisely-positioned HTML inputs over each form field. Changes are live-synced to a portable `.fpdf.json` file you can edit by hand, share, or resume later.
 
+## Quickstart (from source)
+
+```bash
+# 1. Clone and install dependencies
+git clone https://github.com/the-hcma/fpdf.git
+cd fpdf
+npm install
+
+# 2. Build (TypeScript + browser assets)
+npm run build
+
+# 3. Link the CLI so `fpdf` is available on your PATH
+npm link
+
+# 4. Fill a PDF form
+fpdf fill form.pdf --open
+
+# 5. When you're done, export to a new PDF
+fpdf export form.fpdf.json -o filled.pdf
+```
+
+After step 3, `fpdf` behaves identically to the globally installed package. To unlink: `npm unlink -g fpdf`.
+
 ## Requirements
 
 - Node.js ≥ 20 LTS

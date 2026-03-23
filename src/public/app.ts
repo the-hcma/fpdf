@@ -87,6 +87,33 @@ function initWebSocket(
 // ── Field rendering ───────────────────────────────────────────────────────────
 
 const FONT_RATIO = 0.72;
+const MIN_FONT_SIZE = 6; // px — never shrink below this
+
+/**
+ * Shrink the font size of a text input or textarea until its content fits
+ * within the available space, then restore as large as possible up to the
+ * original max size stored in data-max-font-size.
+ */
+function fitFontToBox(el: HTMLElement): void {
+  const maxSize = Number(el.dataset.maxFontSize);
+  if (!maxSize) return;
+
+  // Reset to max first so we can grow back when text is deleted.
+  let size = maxSize;
+  el.style.fontSize = `${String(size)}px`;
+
+  if (el instanceof HTMLTextAreaElement) {
+    while (el.scrollHeight > el.clientHeight && size > MIN_FONT_SIZE) {
+      size -= 1;
+      el.style.fontSize = `${String(size)}px`;
+    }
+  } else if (el instanceof HTMLInputElement) {
+    while (el.scrollWidth > el.clientWidth && size > MIN_FONT_SIZE) {
+      size -= 1;
+      el.style.fontSize = `${String(size)}px`;
+    }
+  }
+}
 
 function positionElement(el: HTMLElement, field: PdfField, page: PdfPage, scale: number): void {
   const { x, y, width, height } = field.placement;
@@ -149,9 +176,11 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
   if (field.required) el.setAttribute('aria-required', 'true');
 
   // Scale font size for text-like fields so text visually fits the PDF bounding box.
+  // Store the max size so fitFontToBox can reset to it and shrink as needed.
   if (field.type === 'text' || field.type === 'textarea') {
-    const renderedHeight = field.placement.height * scale;
-    el.style.fontSize = `${String(Math.round(renderedHeight * FONT_RATIO))}px`;
+    const maxSize = Math.round(field.placement.height * scale * FONT_RATIO);
+    el.dataset.maxFontSize = String(maxSize);
+    el.style.fontSize = `${String(maxSize)}px`;
   }
 
   el.style.width = '100%';
@@ -201,7 +230,11 @@ async function renderPage(
   const scale = viewport.width / docPage.widthPt;
   for (const field of docPage.fields) {
     if (field.readOnly) continue;
-    overlay.appendChild(buildFieldElement(field, docPage, scale));
+    const fieldWrapper = buildFieldElement(field, docPage, scale);
+    overlay.appendChild(fieldWrapper);
+    // Fit font for pre-filled values once the element is in the DOM.
+    const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
+    if (inputEl) fitFontToBox(inputEl);
   }
 
   const wrapper = document.createElement('div');
@@ -235,6 +268,7 @@ function watchInputs(
     const field = fieldById.get(fieldId);
     if (!field) return;
     field.value = readInputValue(target, field);
+    fitFontToBox(target);
     onDirty();
   });
 }

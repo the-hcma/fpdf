@@ -31,7 +31,10 @@ function debounce<T extends unknown[]>(fn: (...args: T) => void, ms: number): (.
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
-function initWebSocket(onSaved: (updatedAt: string) => void): (doc: FpdfDocument) => void {
+function initWebSocket(
+  onSaved: (updatedAt: string) => void,
+  onReload: (doc: FpdfDocument) => void,
+): (doc: FpdfDocument) => void {
   const ws = new WebSocket(`ws://${location.host}/ws`);
 
   ws.addEventListener('message', (event) => {
@@ -42,13 +45,13 @@ function initWebSocket(onSaved: (updatedAt: string) => void): (doc: FpdfDocument
     } catch {
       return;
     }
-    if (
-      typeof msg === 'object' &&
-      msg !== null &&
-      (msg as Record<string, unknown>).type === 'saved'
-    ) {
-      const updatedAt = (msg as Record<string, unknown>).updatedAt;
+    if (typeof msg !== 'object' || msg === null) return;
+    const m = msg as Record<string, unknown>;
+    if (m.type === 'saved') {
+      const updatedAt = m.updatedAt;
       onSaved(typeof updatedAt === 'string' ? updatedAt : new Date().toISOString());
+    } else if (m.type === 'docReload' && typeof m.doc === 'object' && m.doc !== null) {
+      onReload(m.doc as FpdfDocument);
     }
   });
 
@@ -274,13 +277,36 @@ async function main(): Promise<void> {
 
   let baseText = '';
 
-  const sendSave = initWebSocket((updatedAt) => {
-    setStatus(`${baseText} · Saved at ${formatTime(updatedAt)}`);
-    setSaveButtonDirty(false);
-  });
-
   const [docRes, pdfRes] = await Promise.all([fetch('/doc'), fetch('/pdf')]);
   const fpdfDoc = (await docRes.json()) as FpdfDocument;
+
+  const sendSave = initWebSocket(
+    (updatedAt) => {
+      setStatus(`${baseText} · Saved at ${formatTime(updatedAt)}`);
+      setSaveButtonDirty(false);
+    },
+    (newDoc) => {
+      // Apply externally-changed field values to the in-memory doc and DOM inputs.
+      for (const newPage of newDoc.pages) {
+        const existingPage = fpdfDoc.pages.find((p) => p.pageNumber === newPage.pageNumber);
+        if (!existingPage) continue;
+        for (const newField of newPage.fields) {
+          const existing = existingPage.fields.find((f) => f.id === newField.id);
+          if (existing) existing.value = newField.value;
+          const el = document.querySelector<HTMLElement>(`[data-field-id="${newField.id}"]`);
+          if (!el) continue;
+          if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+            el.checked = newField.value === true;
+          } else {
+            (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value =
+              typeof newField.value === 'string' ? newField.value : '';
+          }
+        }
+      }
+      setStatus(`${baseText} · Reloaded`);
+      setSaveButtonDirty(false);
+    },
+  );
   const pdfData = await pdfRes.arrayBuffer();
 
   setStatus('Rendering…');

@@ -226,8 +226,13 @@ const hasText   = fnSet.has(OPS.showText) || fnSet.has(OPS.showSpacedText);
 AcroForm is checked independently via `pdf-lib` and takes precedence: a page can be `acroform` even if it also has vector paths or images underneath.
 
 ### Phase 1 — MVP: AcroForm fields
-- `pdf-lib` enumerates all AcroForm fields: type, name, rectangle, current value
+- `pdf-lib` enumerates all AcroForm fields via `form.getFields()`: type, name, rectangle, current value
 - Covers the majority of fillable PDFs (government forms, contracts, etc.)
+
+**Phase 1.5 — Orphan widget fallback (M10.5)**
+Some real-world PDFs have Widget annotations on pages whose `/AcroForm` field tree is broken or whose root fields array doesn't link back to all widgets. `form.getFields()` misses these; the widgets are still reachable via each page's `/Annots` array.
+
+After calling `form.getFields()`, the analyzer walks each page's raw annotation list and picks up any Widget annotations not already captured. A Widget is "orphan" if its full dotted field name (composed by walking the `/Parent` chain and joining `/T` values with `.`) is absent from the set of names already collected. Orphan widgets are extracted into `PdfField` entries and added to the same `pageFields` map, making the page type `acroform` so export via pdf-lib still works.
 
 ### Phase 2 — Vector path detection (non-AcroForm PDFs)
 
@@ -317,5 +322,8 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | 7a | `03-22-feat_dynamic_font_scaling_to_prevent_overflow_in_text_fields` | Dynamic font shrink on input so text always fits the field without scrolling | ✅ |
 | 8 | `03-22-feat_export_filled_pdf_via_browser_button_and_cli_milestone_8_` | `fpdf export`: write filled values back into AcroForm PDF; browser Export PDF button | ✅ |
 | 9 | `03-22-feat_extract_static_page_text_into_textblocks_on_each_page` | `textBlocks`: extract static page text (headers, labels) via pdfjs-dist; add to schema | ✅ |
-| 10 | `03-22-feat_vector_path_candidate_field_detection` | `pageType` detection + `candidateFields`: classify each page via `getOperatorList()`; parse paths to find line/rect blanks; proximity-match `TextBlock` labels; assign `confidence`; add `PageType`, `CandidateField` types + both fields to schema | 🔲 |
+| 10 | `03-23-feat_vector_path_candidate_field_detection` | `pageType` detection + `candidateFields`: classify each page via `getOperatorList()`; parse paths to find line/rect blanks; proximity-match `TextBlock` labels; assign `confidence`; add `PageType`, `CandidateField` types + both fields to schema | ✅ |
+| 10.5 | `03-23-feat_orphan_widget_fallback` | Walk each page's raw `/Annots` array after `form.getFields()` to recover Widget annotations missed due to a broken `/AcroForm` field tree; extract orphans as regular `PdfField` entries (fully AcroForm-backed, exportable) | ✅ |
+| 10.6 | `03-23-feat_xfa_datasets_read_write` | XFA support: detect `/AcroForm/XFA` datasets packet, decode FlateDecode stream, parse flat XML for initial values; on export, patch datasets XML with filled values and re-compress; `PDFHexString` support in `buildFullFieldName` so orphan widget walk works for hybrid XFA+AcroForm PDFs (e.g. Cigna) | ✅ |
+| 10.7 | `03-23-feat_orphan_widget_fallback` | "No usable fields" handling for print-and-fill forms (e.g. Cigna pharmacy claim form): PDFs where `/Fields[]` is empty, no orphan widgets exist, and all candidate fields are low-confidence (flat lines that are not visible rectangles). Confidence cap: paths with height < `MIN_VISIBLE_HEIGHT` (4pt) are always `low` regardless of label. CLI warns and UI shows a dismissable yellow banner when no page has AcroForm fields or medium/high candidateFields. | ✅ |
 | 11 | `03-22-feat_ui_overlay_candidate_fields_with_dismiss` | UI renders `candidateFields` in a distinct style per confidence level (dashed border, muted background); each widget has a dismiss × button that sets `dismissed: true` and saves; toolbar toggle shows/hides dismissed candidates | 🔲 |

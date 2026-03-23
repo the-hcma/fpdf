@@ -25,6 +25,15 @@ function dismissError(): void {
   document.getElementById('error-banner')?.setAttribute('hidden', '');
 }
 
+function showWarning(msg: string): void {
+  const banner = document.getElementById('warn-banner');
+  const msgEl = document.getElementById('warn-message');
+  if (banner && msgEl) {
+    msgEl.textContent = msg;
+    banner.removeAttribute('hidden');
+  }
+}
+
 function setSaveButtonDirty(dirty: boolean): void {
   const btn = document.getElementById('save') as HTMLButtonElement | null;
   if (btn) btn.disabled = !dirty;
@@ -90,28 +99,53 @@ const FONT_RATIO = 0.72;
 const MIN_FONT_SIZE = 6; // px — never shrink below this
 
 /**
+ * Measure the rendered width of a string at a given font size using an
+ * offscreen canvas. More reliable than scrollWidth for <input> elements,
+ * which can report scroll dimensions larger than the visible area due to
+ * browser caret-rendering quirks and sub-pixel rounding.
+ */
+function measureTextWidth(text: string, sizePx: number, fontFamily: string): number {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return 0;
+  ctx.font = `${String(sizePx)}px ${fontFamily}`;
+  return ctx.measureText(text).width;
+}
+
+/**
  * Shrink the font size of a text input or textarea until its content fits
  * within the available space, then restore as large as possible up to the
  * original max size stored in data-max-font-size.
+ *
+ * For <input> elements we use canvas measureText() rather than scrollWidth —
+ * scrollWidth on absolutely-positioned inputs is unreliable in several
+ * browsers (sub-pixel rounding + caret-reservation can make scrollWidth
+ * exceed clientWidth even for short text, driving the font to MIN_FONT_SIZE).
  */
 function fitFontToBox(el: HTMLElement): void {
   const maxSize = Number(el.dataset.maxFontSize);
   if (!maxSize) return;
 
-  // Reset to max first so we can grow back when text is deleted.
   let size = maxSize;
-  el.style.fontSize = `${String(size)}px`;
 
   if (el instanceof HTMLTextAreaElement) {
+    // scrollHeight is reliable for block-level textarea (line-wrapping).
+    el.style.fontSize = `${String(size)}px`;
     while (el.scrollHeight > el.clientHeight && size > MIN_FONT_SIZE) {
       size -= 1;
       el.style.fontSize = `${String(size)}px`;
     }
   } else if (el instanceof HTMLInputElement) {
-    while (el.scrollWidth > el.clientWidth && size > MIN_FONT_SIZE) {
-      size -= 1;
-      el.style.fontSize = `${String(size)}px`;
+    const cw = el.clientWidth;
+    if (cw > 0 && el.value.length > 0) {
+      const family = getComputedStyle(el).fontFamily;
+      const textWidth = measureTextWidth(el.value, maxSize, family);
+      if (textWidth > cw) {
+        // Scale down proportionally, then clamp to minimum.
+        size = Math.max(MIN_FONT_SIZE, Math.floor(maxSize * (cw / textWidth)));
+      }
     }
+    el.style.fontSize = `${String(size)}px`;
   }
 }
 
@@ -144,7 +178,8 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
       const rb = document.createElement('input');
       rb.type = 'radio';
       rb.name = field.name;
-      rb.checked = field.value === true;
+      rb.value = field.radioValue ?? '';
+      rb.checked = field.radioValue !== undefined && field.value === field.radioValue;
       el = rb;
       break;
     }
@@ -249,8 +284,12 @@ async function renderPage(
 // ── Input change tracking ─────────────────────────────────────────────────────
 
 function readInputValue(el: HTMLElement, field: PdfField): string | boolean {
-  if (field.type === 'checkbox' || field.type === 'radio') {
+  if (field.type === 'checkbox') {
     return (el as HTMLInputElement).checked;
+  }
+  if (field.type === 'radio') {
+    // Return the option string (rb.value = radioValue) so the exporter can select it.
+    return (el as HTMLInputElement).value;
   }
   return (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
 }
@@ -267,9 +306,82 @@ function watchInputs(
     if (!fieldId) return;
     const field = fieldById.get(fieldId);
     if (!field) return;
-    field.value = readInputValue(target, field);
+    const newValue = readInputValue(target, field);
+    field.value = newValue;
+
+    // For radio groups: propagate the selected option string to all sibling
+    // widgets in the same group (same field.name) so the in-memory doc stays
+    // consistent and the exporter receives the same string value for every widget.
+    if (field.type === 'radio') {
+      for (const f of fieldById.values()) {
+        if (f.name === field.name && f.id !== field.id) {
+          f.value = newValue;
+        }
+      }
+    }
+
     fitFontToBox(target);
     onDirty();
+  });
+}
+
+// ── Tab order ─────────────────────────────────────────────────────────────────
+
+/**
+ * Build a position-sorted tab order for all interactive field elements and
+ * intercept Tab / Shift+Tab to step through it.
+ *
+ * Fields are sorted by their PDF placement coordinates: primarily top-to-bottom
+ * (by the field's top edge in PDF points, accumulated across pages), then
+ * left-to-right within a row.  Two fields are considered "on the same row" when
+ * their top edges differ by at most ROW_SNAP points.
+ */
+function initTabOrder(fpdfDoc: FpdfDocument, container: HTMLElement): void {
+  const ROW_SNAP = 6; // pt — fields within 6 pt vertically are treated as one row
+
+  interface Entry {
+    el: HTMLElement;
+    globalY: number; // pt from top of document (PDF y-axis flipped to screen)
+    x: number; // pt from left edge of page
+  }
+
+  const entries: Entry[] = [];
+  let cumulativeHeight = 0;
+
+  for (const page of fpdfDoc.pages) {
+    for (const field of page.fields) {
+      if (field.readOnly) continue;
+      const el = container.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
+      if (!el) continue;
+      // PDF y=0 is the bottom; convert to top-down screen coordinates.
+      const screenY = page.heightPt - field.placement.y - field.placement.height;
+      entries.push({ el, globalY: cumulativeHeight + screenY, x: field.placement.x });
+    }
+    cumulativeHeight += page.heightPt;
+  }
+
+  entries.sort((a, b) => {
+    if (Math.abs(a.globalY - b.globalY) <= ROW_SNAP) return a.x - b.x;
+    return a.globalY - b.globalY;
+  });
+
+  const tabOrder = entries.map((e) => e.el);
+  if (tabOrder.length === 0) return;
+
+  container.addEventListener('keydown', (event) => {
+    if (event.key !== 'Tab') return;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return;
+    const idx = tabOrder.indexOf(active);
+    if (idx === -1) return;
+    event.preventDefault();
+    const nextIdx = event.shiftKey
+      ? (idx - 1 + tabOrder.length) % tabOrder.length
+      : (idx + 1) % tabOrder.length;
+    const next = tabOrder[nextIdx];
+    if (!next) return;
+    next.focus();
+    next.scrollIntoView({ block: 'nearest' });
   });
 }
 
@@ -328,7 +440,7 @@ function initZoom(): void {
 
 function initToggle(): void {
   const stored = localStorage.getItem('fpdf-show-fields');
-  if (stored === 'true') document.body.classList.add('show-fields');
+  if (stored !== 'false') document.body.classList.add('show-fields');
   updateToggleLabel();
 
   const btn = document.getElementById('toggle-fields');
@@ -350,6 +462,9 @@ function updateToggleLabel(): void {
 
 async function main(): Promise<void> {
   document.getElementById('error-dismiss')?.addEventListener('click', dismissError);
+  document.getElementById('warn-dismiss')?.addEventListener('click', () => {
+    document.getElementById('warn-banner')?.setAttribute('hidden', '');
+  });
   initToggle();
   initZoom();
   setStatus('Loading…');
@@ -374,8 +489,11 @@ async function main(): Promise<void> {
           if (existing) existing.value = newField.value;
           const el = document.querySelector<HTMLElement>(`[data-field-id="${newField.id}"]`);
           if (!el) continue;
-          if (el instanceof HTMLInputElement && (el.type === 'checkbox' || el.type === 'radio')) {
+          if (el instanceof HTMLInputElement && el.type === 'checkbox') {
             el.checked = newField.value === true;
+          } else if (el instanceof HTMLInputElement && el.type === 'radio') {
+            // el.value holds the radioValue (option string); check if it matches selection.
+            el.checked = el.value !== '' && el.value === newField.value;
           } else {
             (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value =
               typeof newField.value === 'string' ? newField.value : '';
@@ -401,9 +519,63 @@ async function main(): Promise<void> {
     await renderPage(pdfPage, docPage, pagesContainer);
   }
 
+  initTabOrder(fpdfDoc, pagesContainer);
+
   const pageWord = pdfDoc.numPages === 1 ? 'page' : 'pages';
   baseText = `${fpdfDoc.metadata.pdfFilename} — ${String(pdfDoc.numPages)} ${pageWord}`;
   setStatus(baseText);
+
+  // Show full path as tooltip on the status element.
+  const statusEl = document.getElementById('status');
+  if (statusEl) statusEl.title = fpdfDoc.metadata.originalPdf;
+
+  // Copy-path button: write the full path to the clipboard.
+  const copyPathBtn = document.getElementById('copy-path');
+  if (copyPathBtn) {
+    copyPathBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(fpdfDoc.metadata.originalPdf).then(
+        () => {
+          const prev = copyPathBtn.textContent;
+          copyPathBtn.textContent = 'Copied!';
+          setTimeout(() => {
+            copyPathBtn.textContent = prev;
+          }, 1500);
+        },
+        () => {
+          /* clipboard write failed — silently ignore */
+        },
+      );
+    });
+  }
+
+  const hasUsableFields = fpdfDoc.pages.some(
+    (p) =>
+      p.fields.length > 0 ||
+      p.candidateFields.some(
+        (c) => (c.confidence === 'high' || c.confidence === 'medium') && c.type !== 'checkbox',
+      ),
+  );
+  if (!hasUsableFields) {
+    showWarning(
+      'No fillable fields detected. This PDF appears to be a print-and-fill form — fpdf cannot fill it programmatically.',
+    );
+    const noFieldsMsg = 'No fillable fields were identified in this PDF';
+    const toggleBtn = document.getElementById('toggle-fields') as HTMLButtonElement | null;
+    const exportBtn = document.getElementById('export-pdf') as HTMLButtonElement | null;
+    const clearBtn = document.getElementById('clear-fields') as HTMLButtonElement | null;
+    if (toggleBtn) {
+      toggleBtn.disabled = true;
+      toggleBtn.title = noFieldsMsg;
+    }
+    if (exportBtn) {
+      exportBtn.disabled = true;
+      exportBtn.title = noFieldsMsg;
+    }
+    if (clearBtn) {
+      clearBtn.disabled = true;
+      clearBtn.title = noFieldsMsg;
+    }
+  }
 
   const fieldById = new Map<string, PdfField>();
   for (const page of fpdfDoc.pages) {
@@ -427,6 +599,25 @@ async function main(): Promise<void> {
   saveBtn?.addEventListener('click', () => {
     setStatus(`${baseText} · Saving…`);
     sendSave(fpdfDoc);
+  });
+
+  document.getElementById('clear-fields')?.addEventListener('click', () => {
+    for (const field of fieldById.values()) {
+      field.value = field.type === 'checkbox' ? false : '';
+      const el = document.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
+      if (!el) continue;
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        el.checked = false;
+      } else if (el instanceof HTMLInputElement && el.type === 'radio') {
+        el.checked = false;
+      } else {
+        (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value = '';
+        fitFontToBox(el);
+      }
+    }
+    setStatus(`${baseText} · Unsaved changes`);
+    setSaveButtonDirty(true);
+    debouncedSave();
   });
 
   document.getElementById('export-pdf')?.addEventListener('click', () => {

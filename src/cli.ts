@@ -1,15 +1,75 @@
 #!/usr/bin/env node
 import { writeFile, readFile } from 'node:fs/promises';
+import { PDFDocument } from 'pdf-lib';
 import { exportPdf } from './exporter.js';
 import * as path from 'node:path';
 import { Command } from 'commander';
 import open from 'open';
-import { logger } from './logger.js';
-import { analyzePdf, AnalyzerError } from './analyzer.js';
+import { logger, installWarnFilter } from './logger.js';
+import { analyzePdf, AnalyzerError, getXfaDatasetsInfo, patchXfaDatasetsXml } from './analyzer.js';
 import { startServer } from './server.js';
 import type { FpdfDocument } from './types.js';
 
+/**
+ * Return true if the document has at least one fillable field or at least one
+ * medium/high-confidence candidate field across all pages.  When false the PDF
+ * is a print-and-fill form that fpdf cannot help with.
+ */
+function hasUsableFields(doc: FpdfDocument): boolean {
+  return doc.pages.some(
+    (p) =>
+      p.fields.length > 0 ||
+      p.candidateFields.some(
+        (c) => (c.confidence === 'high' || c.confidence === 'medium') && c.type !== 'checkbox',
+      ),
+  );
+}
+
+/**
+ * Return true if any radio field in the doc is missing `radioValue` (created
+ * before the field was added to the schema) or has a legacy boolean value
+ * (set by the pre-radioValue browser UI).  Either case means the JSON was
+ * written by an older version and needs to be refreshed.
+ */
+function needsRadioMigration(doc: FpdfDocument): boolean {
+  return doc.pages.some((p) =>
+    p.fields.some(
+      (f) => f.type === 'radio' && (!('radioValue' in f) || typeof f.value === 'boolean'),
+    ),
+  );
+}
+
+/**
+ * Re-analyze `pdfPath` and copy any non-empty string field values from `oldDoc`
+ * into the fresh document.  Boolean radio values from the old UI are dropped
+ * (the user will need to re-select them).
+ */
+async function migrateDoc(pdfPath: string, oldDoc: FpdfDocument): Promise<FpdfDocument> {
+  const freshDoc = await analyzePdf(pdfPath);
+
+  // Build name→value map from oldDoc, keeping only unambiguous string values.
+  const saved = new Map<string, string>();
+  for (const page of oldDoc.pages) {
+    for (const field of page.fields) {
+      if (typeof field.value === 'string' && field.value !== '' && !saved.has(field.name)) {
+        saved.set(field.name, field.value);
+      }
+    }
+  }
+
+  // Apply saved values to freshDoc fields.
+  for (const page of freshDoc.pages) {
+    for (const field of page.fields) {
+      const v = saved.get(field.name);
+      if (v !== undefined) field.value = v;
+    }
+  }
+
+  return freshDoc;
+}
+
 export function buildProgram(): Command {
+  installWarnFilter();
   const program = new Command();
 
   program.name('fpdf').description('Fill PDF forms via a local browser overlay').version('0.1.0');
@@ -43,8 +103,16 @@ export function buildProgram(): Command {
             // File absent — fall through to fresh analysis.
           }
           if (raw !== null) {
-            doc = JSON.parse(raw) as FpdfDocument;
-            logger.info(`Resumed session from ${jsonPath}`);
+            const loaded = JSON.parse(raw) as FpdfDocument;
+            if (needsRadioMigration(loaded)) {
+              logger.info(`Migrating ${jsonPath} (radio field schema updated) — re-analyzing…`);
+              doc = await migrateDoc(pdfPath, loaded);
+              await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
+              logger.info(`Migration complete → ${jsonPath}`);
+            } else {
+              doc = loaded;
+              logger.info(`Resumed session from ${jsonPath}`);
+            }
           } else {
             doc = await analyzePdf(pdfPath);
             await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
@@ -52,8 +120,20 @@ export function buildProgram(): Command {
           }
         }
 
+        if (!hasUsableFields(doc)) {
+          logger.warn(
+            'No fillable fields detected. This PDF appears to be a print-and-fill form that fpdf cannot fill programmatically.',
+          );
+        }
+
+        const totalFields = doc.pages.reduce((n, p) => n + p.fields.length, 0);
+        const totalPages = doc.pages.length;
+        const pageWord = totalPages === 1 ? 'page' : 'pages';
+        const fieldWord = totalFields === 1 ? 'field' : 'fields';
         const handle = await startServer({ pdfPath, doc, jsonPath });
-        logger.info(`Listening on ${handle.url}`);
+        logger.info(
+          `Ready — ${doc.metadata.pdfFilename} · ${String(totalPages)} ${pageWord} · ${String(totalFields)} ${fieldWord} · ${handle.url}`,
+        );
         process.stdout.write(`${handle.url}\n`);
 
         if (opts.open) {
@@ -90,6 +170,11 @@ export function buildProgram(): Command {
     .action((file: string) => {
       const run = async (): Promise<void> => {
         const doc = await analyzePdf(file);
+        if (!hasUsableFields(doc)) {
+          logger.warn(
+            'No fillable fields detected. This PDF appears to be a print-and-fill form that fpdf cannot fill programmatically.',
+          );
+        }
         const outPath = path.join(
           path.dirname(path.resolve(file)),
           `${path.basename(file, path.extname(file))}.fpdf.json`,
@@ -100,6 +185,51 @@ export function buildProgram(): Command {
       run().catch((err: unknown) => {
         const msg = err instanceof AnalyzerError ? err.message : String(err);
         logger.error(msg);
+        process.exit(1);
+      });
+    });
+
+  program
+    .command('debug-export <jsonFile>')
+    .description('Show what patchXfaDatasetsXml writes for each field (no PDF written)')
+    .action((jsonFile: string) => {
+      const run = async (): Promise<void> => {
+        const jsonPath = path.resolve(jsonFile);
+        const raw = await readFile(jsonPath, 'utf-8');
+        const doc = JSON.parse(raw) as FpdfDocument;
+
+        // Show radio fields
+        for (const page of doc.pages) {
+          for (const field of page.fields) {
+            if (field.type === 'radio' || field.type === 'checkbox') {
+              process.stdout.write(
+                `FIELD  name=${field.name}  type=${field.type}  value=${JSON.stringify(field.value)}  radioValue=${JSON.stringify((field as unknown as Record<string, unknown>).radioValue)}\n`,
+              );
+            }
+          }
+        }
+
+        // Show XFA datasets before and after patching
+        const pdfBytes = await readFile(doc.metadata.originalPdf);
+        const pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+        const xfaInfo = getXfaDatasetsInfo(pdfDoc);
+        if (!xfaInfo) {
+          process.stdout.write('No XFA datasets found in PDF.\n');
+          return;
+        }
+        process.stdout.write(`\n--- XFA datasets XML (initial) ---\n${xfaInfo.xml}\n`);
+
+        const allValues = new Map<string, string | boolean>();
+        for (const page of doc.pages) {
+          for (const field of page.fields) {
+            if (!allValues.has(field.name)) allValues.set(field.name, field.value);
+          }
+        }
+        const patched = patchXfaDatasetsXml(xfaInfo.xml, allValues);
+        process.stdout.write(`\n--- XFA datasets XML (patched) ---\n${patched}\n`);
+      };
+      run().catch((err: unknown) => {
+        logger.error(err instanceof Error ? err.message : String(err));
         process.exit(1);
       });
     });

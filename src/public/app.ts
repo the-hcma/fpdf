@@ -126,7 +126,7 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
     }
   }
 
-  el.title = field.displayName;
+  el.title = field.tooltip ?? field.displayName;
   el.dataset.fieldId = field.id;
   if (field.readOnly) (el as HTMLInputElement).disabled = true;
   positionElement(el, field, page, scale);

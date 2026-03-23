@@ -25,6 +25,12 @@ export interface PdfField {
   label: string;
   /** Cleaned-up display name for UI rendering, e.g. "Date of Birth". */
   displayName: string;
+  /**
+   * AcroForm alternate field name (/TU entry) — human-readable instructions
+   * embedded in the PDF, e.g. "Enter patient's date of birth (MM/DD/YYYY)".
+   * Omitted when the field has no /TU entry.
+   */
+  tooltip?: string;
   placement: Placement;
   /** Current fill value. String for text/select, boolean for checkbox/radio. */
   value: string | boolean;

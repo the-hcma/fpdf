@@ -5,7 +5,6 @@
     "moduleResolution": "Bundler",
     "lib": ["ES2022", "DOM"],
     "outDir": "dist/public",
-    "rootDir": "src/public",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -14,6 +13,6 @@
     "esModuleInterop": true,
     "skipLibCheck": false
   },
-  "include": ["src/public/**/*.ts"],
+  "include": ["src/public/**/*.ts", "src/types.ts"],
   "exclude": ["node_modules"]
 }

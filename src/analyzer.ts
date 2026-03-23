@@ -14,7 +14,7 @@ import {
   PDFString,
   type PDFField,
 } from 'pdf-lib';
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, GlobalWorkerOptions, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type {
   FpdfDocument,
   FpdfMetadata,
@@ -23,6 +23,9 @@ import type {
   Placement,
   FieldType,
   TextBlock,
+  PageType,
+  CandidateField,
+  CandidateFieldConfidence,
 } from './types.js';
 import { logger } from './logger.js';
 
@@ -217,6 +220,259 @@ async function extractTextBlocks(
   });
 }
 
+// ── Candidate field detection constants ──────────────────────────────────────
+
+const MIN_FIELD_WIDTH = 30; // pt — narrower paths are noise
+const MAX_FIELD_HEIGHT = 60; // pt — taller non-wide shapes are structural
+const CHECKBOX_MAX_DIM = 15; // pt — near-square boxes this size are checkboxes
+const TEXTAREA_MIN_H = 30; // pt — tall boxes are textareas
+const NOISE_WIDTH_RATIO = 0.85; // fraction of page width → structural rule
+
+/**
+ * Classify a PDF page based on its operator list and AcroForm field count.
+ * The operator list scan is O(n) in the number of operators and runs in < 1ms.
+ */
+export function detectPageType(fnArray: number[], hasAcroFormFields: boolean): PageType {
+  if (hasAcroFormFields) return 'acroform';
+  const fnSet = new Set(fnArray);
+  const hasImages = fnSet.has(OPS.paintImageXObject) || fnSet.has(OPS.paintInlineImageXObject);
+  const hasPaths =
+    fnSet.has(OPS.stroke) ||
+    fnSet.has(OPS.fill) ||
+    fnSet.has(OPS.fillStroke) ||
+    fnSet.has(OPS.constructPath) ||
+    fnSet.has(OPS.rectangle);
+  const hasText = fnSet.has(OPS.showText) || fnSet.has(OPS.showSpacedText);
+  if (hasImages && !hasPaths && !hasText) return 'raster';
+  if (hasImages && !hasPaths && hasText) return 'raster+ocr';
+  if (hasImages && (hasPaths || hasText)) return 'hybrid';
+  return 'vector';
+}
+
+/** 2-D affine transformation matrix in PDF order: [a, b, c, d, e, f]. */
+type Matrix = [number, number, number, number, number, number];
+
+/** Apply a CTM to a single point, returning the transformed [x, y]. */
+function applyCtm(m: Matrix, x: number, y: number): [number, number] {
+  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+}
+
+/** Concatenate two matrices: result = m1 * m2. */
+function concatMatrix(m1: Matrix, m2: Matrix): Matrix {
+  const [a1, b1, c1, d1, e1, f1] = m1;
+  const [a2, b2, c2, d2, e2, f2] = m2;
+  return [
+    a1 * a2 + c1 * b2,
+    b1 * a2 + d1 * b2,
+    a1 * c2 + c1 * d2,
+    b1 * c2 + d1 * d2,
+    a1 * e2 + c1 * f2 + e1,
+    b1 * e2 + d1 * f2 + f1,
+  ];
+}
+
+/**
+ * Transform a local-space bbox [minX, minY, maxX, maxY] to page space via
+ * the current CTM, returning a {x, y, w, h} suitable for candidate scoring.
+ * A degenerate height (flat underline) is normalised to h=1.
+ */
+function bboxToBox(
+  m: Matrix,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): { x: number; y: number; w: number; h: number } {
+  const [px1, py1] = applyCtm(m, minX, minY);
+  const [px2, py2] = applyCtm(m, maxX, maxY);
+  const x = Math.min(px1, px2);
+  const y = Math.min(py1, py2);
+  const w = Math.abs(px2 - px1);
+  const h = Math.abs(py2 - py1) < 2 ? 1 : Math.abs(py2 - py1); // flat line → 1 pt
+  return { x, y, w, h };
+}
+
+/**
+ * Find the nearest TextBlock that is either directly above or to the left of
+ * the candidate bounding box. Returns the block or null.
+ */
+function findNearestLabel(
+  box: { x: number; y: number; w: number; h: number },
+  textBlocks: TextBlock[],
+): TextBlock | null {
+  let best: TextBlock | null = null;
+  let bestDist = Infinity;
+
+  const fieldCx = box.x + box.w / 2;
+  const fieldCy = box.y + box.h / 2;
+
+  for (const block of textBlocks) {
+    const bx = block.placement.x;
+    const by = block.placement.y;
+    const bw = block.placement.width;
+    const bh = block.placement.height;
+    const fs = block.fontSize;
+
+    // Above: block baseline within [field.top, field.top + 2*fontSize]
+    const fieldTop = box.y + box.h;
+    const isAbove = by >= fieldTop && by <= fieldTop + 2 * fs;
+    // Horizontal overlap: block x-range overlaps field x-range
+    const horizontalOverlap = bx < box.x + box.w && bx + bw > box.x;
+
+    // Left: vertically aligned within 1 line height, block ends before field starts
+    const isLeft = Math.abs(by - box.y) < fs && bx + bw < box.x + 5;
+
+    if ((isAbove && horizontalOverlap) || isLeft) {
+      const bcx = bx + bw / 2;
+      const bcy = by + bh / 2;
+      const dist = Math.sqrt((bcx - fieldCx) ** 2 + (bcy - fieldCy) ** 2);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = block;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Evaluate a bounding box (already in page space) as a candidate field.
+ * Applies noise filtering, type inference, label proximity, and confidence scoring.
+ */
+function evaluateBox(
+  box: { x: number; y: number; w: number; h: number },
+  textBlocks: TextBlock[],
+  pageWidth: number,
+  candidates: CandidateField[],
+): void {
+  const { x, y, w, h } = box;
+
+  // Noise filter
+  if (w > pageWidth * NOISE_WIDTH_RATIO) return; // full-width structural rule
+  const mightBeCheckbox = Math.abs(w - h) < 4 && w >= 5 && w <= CHECKBOX_MAX_DIM;
+  if (!mightBeCheckbox && w < MIN_FIELD_WIDTH && h < MIN_FIELD_WIDTH) return; // tiny artifact
+  if (h > MAX_FIELD_HEIGHT && w / (h || 1) < 2) return; // tall non-wide shape
+
+  // Type inference
+  let type: CandidateField['type'];
+  if (Math.abs(w - h) < 4 && w <= CHECKBOX_MAX_DIM) {
+    type = 'checkbox';
+  } else if (h > TEXTAREA_MIN_H) {
+    type = 'textarea';
+  } else {
+    type = 'text';
+  }
+
+  // Label proximity
+  const labelBlock = findNearestLabel({ x, y, w, h }, textBlocks);
+  const label = labelBlock?.text ?? '';
+
+  // Confidence
+  let confidence: CandidateFieldConfidence;
+  const goodGeometry =
+    (type === 'checkbox' && w <= CHECKBOX_MAX_DIM) ||
+    (type !== 'checkbox' && w >= MIN_FIELD_WIDTH && h <= MAX_FIELD_HEIGHT);
+  if (goodGeometry && labelBlock) {
+    confidence = 'high';
+  } else if (goodGeometry || labelBlock) {
+    confidence = 'medium';
+  } else {
+    confidence = 'low';
+  }
+
+  candidates.push({
+    id: randomUUID(),
+    type,
+    label,
+    displayName: label,
+    placement: { x, y, width: w, height: h },
+    value: type === 'checkbox' ? false : '',
+    confidence,
+    dismissed: false,
+  });
+}
+
+/**
+ * Walk the pdfjs-dist operator list for a page and detect vector path shapes
+ * that look like form field blanks (underlines, stroked rectangles, checkboxes).
+ * Proximity-matches each candidate to the nearest TextBlock label.
+ *
+ * Supports two operator formats emitted by pdfjs-dist:
+ *   - Legacy: OPS.rectangle (19) followed by OPS.stroke (20) — used in unit tests
+ *   - v5+: OPS.constructPath (91) with args = [paintOp, opsAndCoords, Float32Array bbox]
+ *
+ * CTM tracking via OPS.save / OPS.restore / OPS.transform ensures correct page coords
+ * when paths are drawn in a local coordinate space (e.g. pdf-lib drawRectangle).
+ */
+export function detectCandidateFields(
+  ops: { fnArray: number[]; argsArray: unknown[][] },
+  textBlocks: TextBlock[],
+  pageWidth: number,
+): CandidateField[] {
+  const candidates: CandidateField[] = [];
+
+  // CTM tracking
+  const ctmStack: Matrix[] = [];
+  let ctm: Matrix = [1, 0, 0, 1, 0, 0];
+
+  // Pending rect from OPS.rectangle (legacy path: rectangle → stroke)
+  let pendingRect: { x: number; y: number; w: number; h: number } | null = null;
+
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    const fn = ops.fnArray[i] ?? -1;
+    const args: unknown[] = ops.argsArray[i] ?? [];
+
+    if (fn === OPS.save) {
+      ctmStack.push([...ctm] as Matrix);
+    } else if (fn === OPS.restore) {
+      const prev = ctmStack.pop();
+      if (prev) ctm = prev;
+      pendingRect = null;
+    } else if (fn === OPS.transform) {
+      const m = args as number[];
+      if (m.length >= 6) {
+        ctm = concatMatrix(ctm, m as Matrix);
+      }
+    } else if (fn === OPS.rectangle) {
+      // Legacy OPS.rectangle (19): args = [x, y, w, h] in current space
+      const [rx, ry, rw, rh] = args as number[];
+      if (rx !== undefined && ry !== undefined && rw !== undefined && rh !== undefined) {
+        pendingRect = bboxToBox(ctm, rx, ry, rx + rw, ry + rh);
+      }
+    } else if (fn === OPS.stroke || fn === OPS.closeStroke) {
+      // Legacy stroke after OPS.rectangle
+      if (pendingRect) evaluateBox(pendingRect, textBlocks, pageWidth, candidates);
+      pendingRect = null;
+    } else if (fn === OPS.constructPath) {
+      // pdfjs-dist v5+ format: args = [paintOp, interleavedOpsAndCoords, Float32Array bbox]
+      const paintOp = args[0] as number;
+      const bbox = args[2] as Float32Array | number[] | undefined;
+      if (
+        (paintOp === OPS.stroke || paintOp === OPS.closeStroke) &&
+        bbox !== undefined &&
+        bbox.length >= 4
+      ) {
+        const [bx0 = 0, bx1 = 0, bx2 = 0, bx3 = 0] = bbox;
+        const box = bboxToBox(ctm, bx0, bx1, bx2, bx3);
+        evaluateBox(box, textBlocks, pageWidth, candidates);
+      }
+      pendingRect = null;
+    } else if (
+      fn === OPS.fill ||
+      fn === OPS.eoFill ||
+      fn === OPS.fillStroke ||
+      fn === OPS.eoFillStroke ||
+      fn === OPS.closeFillStroke ||
+      fn === OPS.closeEOFillStroke ||
+      fn === OPS.endPath
+    ) {
+      pendingRect = null; // filled/abandoned paths are not blank form fields
+    }
+  }
+
+  return candidates;
+}
+
 /**
  * Analyze a PDF file and extract all AcroForm fields into an FpdfDocument.
  *
@@ -328,12 +584,26 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     const { width, height } = page.getSize();
 
     let textBlocks: TextBlock[] = [];
+    let pageType: PageType = 'vector';
+    let candidateFields: CandidateField[] = [];
+
     if (pdfjsDoc !== null) {
       try {
         const pdfjsPage = await pdfjsDoc.getPage(p); // 1-based
+        // Fetch operator list once — shared by pageType detection and candidateFields
+        const ops = await pdfjsPage.getOperatorList();
+        const pageHasAcroFields = (pageFields.get(p) ?? []).length > 0;
+        pageType = detectPageType(ops.fnArray, pageHasAcroFields);
         textBlocks = await extractTextBlocks(pdfjsPage);
+        if (pageType !== 'acroform' && pageType !== 'raster') {
+          candidateFields = detectCandidateFields(
+            { fnArray: ops.fnArray, argsArray: ops.argsArray as unknown[][] },
+            textBlocks,
+            width,
+          );
+        }
       } catch {
-        // best-effort — leave textBlocks empty for this page
+        // best-effort — leave pageType/textBlocks/candidateFields at defaults
       }
     }
 
@@ -341,7 +611,9 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
       pageNumber: p,
       widthPt: width,
       heightPt: height,
+      pageType,
       fields: pageFields.get(p) ?? [],
+      candidateFields,
       textBlocks,
     });
   }

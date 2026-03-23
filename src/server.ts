@@ -148,6 +148,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   const close = (): Promise<void> =>
     new Promise((resolve, reject) => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      httpServer.closeAllConnections();
       wss.close(() => {
         httpServer.close((err) => {
           if (err) reject(err);

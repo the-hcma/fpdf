@@ -36,6 +36,8 @@ let dropdownPdfPath: string;
 let radioGroupPdfPath: string;
 let multilineTextPdfPath: string;
 let twoPagePdfPath: string;
+let readonlyPdfPath: string;
+let buttonPdfPath: string;
 
 beforeAll(async () => {
   // 1. PDF with no AcroForm fields
@@ -107,6 +109,34 @@ beforeAll(async () => {
     f2.addToPage(page2, { x: 50, y: 700, width: 200, height: 20 });
   });
   twoPagePdfPath = await writeTempPdf('two-page.pdf', twoPageBytes);
+
+  // 8. PDF with a readOnly text field (display label) and a writable field
+  const readonlyBytes = await makePdfBytes((doc) => {
+    const page = doc.addPage([612, 792]);
+    const form = doc.getForm();
+    const label = form.createTextField('staticLabel');
+    label.setText('Static content');
+    label.enableReadOnly();
+    label.addToPage(page, { x: 50, y: 750, width: 200, height: 20 });
+    const editable = form.createTextField('editableField');
+    editable.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
+  });
+  readonlyPdfPath = await writeTempPdf('readonly.pdf', readonlyBytes);
+
+  // 9. PDF with a button field (image/push-button widget)
+  const buttonBytes = await makePdfBytes((doc) => {
+    const page = doc.addPage([612, 792]);
+    const form = doc.getForm();
+    form.createButton('logoBtn').addToPage('Logo', page, {
+      x: 50,
+      y: 700,
+      width: 100,
+      height: 40,
+    });
+    const tf = form.createTextField('name');
+    tf.addToPage(page, { x: 50, y: 620, width: 200, height: 20 });
+  });
+  buttonPdfPath = await writeTempPdf('button.pdf', buttonBytes);
 });
 
 // ---------------------------------------------------------------------------
@@ -391,6 +421,33 @@ describe('analyzePdf', () => {
       const doc = await analyzePdf(twoPagePdfPath);
       const page1Fields = doc.pages[0]?.fields ?? [];
       expect(page1Fields.every((f) => f.name !== 'page2field')).toBe(true);
+    });
+  });
+
+  describe('field filtering', () => {
+    it('excludes readOnly fields from the output', async () => {
+      const doc = await analyzePdf(readonlyPdfPath);
+      const fields = doc.pages[0]?.fields ?? [];
+      expect(fields.every((f) => !f.readOnly)).toBe(true);
+      expect(fields.some((f) => f.name === 'staticLabel')).toBe(false);
+    });
+
+    it('includes writable fields when a readOnly field is also present', async () => {
+      const doc = await analyzePdf(readonlyPdfPath);
+      const fields = doc.pages[0]?.fields ?? [];
+      expect(fields.some((f) => f.name === 'editableField')).toBe(true);
+    });
+
+    it('excludes button (image widget) fields from the output', async () => {
+      const doc = await analyzePdf(buttonPdfPath);
+      const fields = doc.pages[0]?.fields ?? [];
+      expect(fields.every((f) => f.name !== 'logoBtn')).toBe(true);
+    });
+
+    it('includes text fields when a button field is also present', async () => {
+      const doc = await analyzePdf(buttonPdfPath);
+      const fields = doc.pages[0]?.fields ?? [];
+      expect(fields.some((f) => f.name === 'name')).toBe(true);
     });
   });
 });

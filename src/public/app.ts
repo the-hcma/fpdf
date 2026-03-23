@@ -10,6 +10,62 @@ function setStatus(msg: string): void {
   if (el) el.textContent = msg;
 }
 
+function setSaveButtonDirty(dirty: boolean): void {
+  const btn = document.getElementById('save') as HTMLButtonElement | null;
+  if (btn) btn.disabled = !dirty;
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString();
+}
+
+function debounce<T extends unknown[]>(fn: (...args: T) => void, ms: number): (...args: T) => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return (...args: T) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      fn(...args);
+    }, ms);
+  };
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+
+function initWebSocket(onSaved: (updatedAt: string) => void): (doc: FpdfDocument) => void {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.addEventListener('message', (event) => {
+    const raw = typeof event.data === 'string' ? event.data : '';
+    let msg: unknown;
+    try {
+      msg = JSON.parse(raw) as unknown;
+    } catch {
+      return;
+    }
+    if (
+      typeof msg === 'object' &&
+      msg !== null &&
+      (msg as Record<string, unknown>).type === 'saved'
+    ) {
+      const updatedAt = (msg as Record<string, unknown>).updatedAt;
+      onSaved(typeof updatedAt === 'string' ? updatedAt : new Date().toISOString());
+    }
+  });
+
+  ws.addEventListener('error', () => {
+    setStatus('Disconnected');
+  });
+  ws.addEventListener('close', () => {
+    setStatus('Disconnected');
+  });
+
+  return (doc: FpdfDocument) => {
+    if (ws.readyState !== WebSocket.OPEN) return;
+    doc.metadata.updatedAt = new Date().toISOString();
+    ws.send(JSON.stringify({ type: 'save', doc }));
+  };
+}
+
 // ── Field rendering ───────────────────────────────────────────────────────────
 
 function positionElement(el: HTMLElement, field: PdfField, page: PdfPage, scale: number): void {
@@ -68,6 +124,7 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
   }
 
   el.title = field.displayName;
+  el.dataset.fieldId = field.id;
   if (field.readOnly) (el as HTMLInputElement).disabled = true;
   positionElement(el, field, page, scale);
   return el;
@@ -98,6 +155,7 @@ async function renderPage(
 
   const scale = viewport.width / docPage.widthPt;
   for (const field of docPage.fields) {
+    if (field.readOnly) continue;
     overlay.appendChild(buildFieldElement(field, docPage, scale));
   }
 
@@ -106,6 +164,32 @@ async function renderPage(
   wrapper.appendChild(canvas);
   wrapper.appendChild(overlay);
   container.appendChild(wrapper);
+}
+
+// ── Input change tracking ─────────────────────────────────────────────────────
+
+function readInputValue(el: HTMLElement, field: PdfField): string | boolean {
+  if (field.type === 'checkbox' || field.type === 'radio') {
+    return (el as HTMLInputElement).checked;
+  }
+  return (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value;
+}
+
+function watchInputs(
+  container: HTMLElement,
+  fieldById: Map<string, PdfField>,
+  onDirty: () => void,
+): void {
+  container.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const fieldId = target.dataset.fieldId;
+    if (!fieldId) return;
+    const field = fieldById.get(fieldId);
+    if (!field) return;
+    field.value = readInputValue(target, field);
+    onDirty();
+  });
 }
 
 // ── Toggle ────────────────────────────────────────────────────────────────────
@@ -136,6 +220,13 @@ async function main(): Promise<void> {
   initToggle();
   setStatus('Loading…');
 
+  let baseText = '';
+
+  const sendSave = initWebSocket((updatedAt) => {
+    setStatus(`${baseText} · Saved at ${formatTime(updatedAt)}`);
+    setSaveButtonDirty(false);
+  });
+
   const [docRes, pdfRes] = await Promise.all([fetch('/doc'), fetch('/pdf')]);
   const fpdfDoc = (await docRes.json()) as FpdfDocument;
   const pdfData = await pdfRes.arrayBuffer();
@@ -154,7 +245,32 @@ async function main(): Promise<void> {
   }
 
   const pageWord = pdfDoc.numPages === 1 ? 'page' : 'pages';
-  setStatus(`${fpdfDoc.metadata.pdfFilename} — ${String(pdfDoc.numPages)} ${pageWord}`);
+  baseText = `${fpdfDoc.metadata.pdfFilename} — ${String(pdfDoc.numPages)} ${pageWord}`;
+  setStatus(baseText);
+
+  const fieldById = new Map<string, PdfField>();
+  for (const page of fpdfDoc.pages) {
+    for (const field of page.fields) {
+      fieldById.set(field.id, field);
+    }
+  }
+
+  const debouncedSave = debounce(() => {
+    setStatus(`${baseText} · Saving…`);
+    sendSave(fpdfDoc);
+  }, 800);
+
+  watchInputs(pagesContainer, fieldById, () => {
+    setStatus(`${baseText} · Unsaved changes`);
+    setSaveButtonDirty(true);
+    debouncedSave();
+  });
+
+  const saveBtn = document.getElementById('save');
+  saveBtn?.addEventListener('click', () => {
+    setStatus(`${baseText} · Saving…`);
+    sendSave(fpdfDoc);
+  });
 }
 
 main().catch((err: unknown) => {

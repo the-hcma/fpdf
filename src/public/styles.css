@@ -30,6 +30,7 @@ body {
   color: #555;
 }
 
+#save,
 #toggle-fields {
   font-size: 13px;
   padding: 4px 10px;
@@ -39,8 +40,14 @@ body {
   cursor: pointer;
 }
 
+#save:not(:disabled):hover,
 #toggle-fields:hover {
   background: #e9e9e9;
+}
+
+#save:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* ── Page layout ── */

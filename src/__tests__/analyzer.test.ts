@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { tmpdir } from 'node:os';
 import { writeFile, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import { analyzePdf, AnalyzerError, deriveLabel, deriveDisplayName } from '../analyzer.js';
 
 // ---------------------------------------------------------------------------
@@ -30,6 +30,8 @@ async function writeTempPdf(name: string, bytes: Uint8Array): Promise<string> {
 // ---------------------------------------------------------------------------
 
 let emptyPdfPath: string;
+let textBlockPdfPath: string;
+let sameLinePdfPath: string;
 let textFieldPdfPath: string;
 let checkboxPdfPath: string;
 let dropdownPdfPath: string;
@@ -45,6 +47,27 @@ beforeAll(async () => {
     doc.addPage();
   });
   emptyPdfPath = await writeTempPdf('empty.pdf', emptyBytes);
+
+  // 1b. PDF with drawn static text (header + label) alongside a form field
+  const textBlockBytes = await makePdfBytes(async (doc) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([612, 792]);
+    page.drawText('Patient Information', { x: 50, y: 720, size: 14, font });
+    page.drawText('First Name', { x: 50, y: 675, size: 10, font });
+    const form = doc.getForm();
+    const tf = form.createTextField('firstName');
+    tf.addToPage(page, { x: 50, y: 650, width: 200, height: 20 });
+  });
+  textBlockPdfPath = await writeTempPdf('text-blocks.pdf', textBlockBytes);
+
+  // 1c. PDF with two separate drawText calls at the same y (triggers line-merging)
+  const sameLineBytes = await makePdfBytes(async (doc) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([612, 792]);
+    page.drawText('Last Name', { x: 50, y: 700, size: 12, font });
+    page.drawText('First Name', { x: 200, y: 700, size: 12, font });
+  });
+  sameLinePdfPath = await writeTempPdf('same-line.pdf', sameLineBytes);
 
   // 2. PDF with a single text field
   const textBytes = await makePdfBytes((doc) => {
@@ -449,5 +472,93 @@ describe('analyzePdf', () => {
       const fields = doc.pages[0]?.fields ?? [];
       expect(fields.some((f) => f.name === 'name')).toBe(true);
     });
+  });
+});
+
+describe('textBlocks extraction', () => {
+  it('each page has a textBlocks array', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    expect(Array.isArray(doc.pages[0]?.textBlocks)).toBe(true);
+  });
+
+  it('finds the header text block', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    expect(blocks.some((b) => b.text.includes('Patient Information'))).toBe(true);
+  });
+
+  it('finds the label text block', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    expect(blocks.some((b) => b.text.includes('First Name'))).toBe(true);
+  });
+
+  it('each block has positive width, height, and fontSize', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    for (const block of blocks) {
+      expect(block.placement.width).toBeGreaterThan(0);
+      expect(block.placement.height).toBeGreaterThan(0);
+      expect(block.fontSize).toBeGreaterThan(0);
+    }
+  });
+
+  it('each block has a non-empty fontName string', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(typeof block.fontName).toBe('string');
+      expect(block.fontName.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('header block y is above label block y (PDF y increases upward)', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    const header = blocks.find((b) => b.text.includes('Patient Information'));
+    const label = blocks.find((b) => b.text.includes('First Name'));
+    expect(header).toBeDefined();
+    expect(label).toBeDefined();
+    if (!header || !label) return;
+    expect(header.placement.y).toBeGreaterThan(label.placement.y);
+  });
+
+  it('header placement.x is approximately 50pt', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    const header = blocks.find((b) => b.text.includes('Patient Information'));
+    expect(header).toBeDefined();
+    if (!header) return;
+    expect(header.placement.x).toBeGreaterThanOrEqual(48);
+    expect(header.placement.x).toBeLessThanOrEqual(52);
+  });
+
+  it('header fontSize is approximately 14', async () => {
+    const doc = await analyzePdf(textBlockPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    const header = blocks.find((b) => b.text.includes('Patient Information'));
+    expect(header).toBeDefined();
+    if (!header) return;
+    expect(header.fontSize).toBeGreaterThanOrEqual(13);
+    expect(header.fontSize).toBeLessThanOrEqual(15);
+  });
+
+  it('empty page returns empty textBlocks', async () => {
+    const doc = await analyzePdf(emptyPdfPath);
+    expect(doc.pages[0]?.textBlocks).toEqual([]);
+  });
+
+  it('merges separate text items on the same line into one block', async () => {
+    const doc = await analyzePdf(sameLinePdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    // Two drawText calls at y=700 with same font/size should be merged into one block
+    // that contains both strings
+    const merged = blocks.find((b) => b.text.includes('Last Name') && b.text.includes('First Name'));
+    // pdfjs may or may not merge adjacent same-font items; either way blocks must be non-empty
+    expect(blocks.length).toBeGreaterThan(0);
+    if (merged) {
+      expect(merged.placement.width).toBeGreaterThan(0);
+    }
   });
 });

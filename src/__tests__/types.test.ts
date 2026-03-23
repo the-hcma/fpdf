@@ -34,6 +34,7 @@ describe('FpdfDocument shape', () => {
           widthPt: 612,
           heightPt: 792,
           fields: [field],
+          textBlocks: [],
         },
       ],
     };

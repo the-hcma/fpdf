@@ -40,6 +40,24 @@ export interface PdfField {
   options: string[];
 }
 
+/**
+ * A run of static text from the page content stream (not an AcroForm field).
+ * Useful for LLM-based form filling: proximity to a TextBlock identifies the
+ * section or label that explains what belongs in a nearby field.
+ */
+export interface TextBlock {
+  text: string;
+  placement: Placement;
+  /** Font size in points, derived from the rendered glyph height. */
+  fontSize: number;
+  /**
+   * PDF font resource name as reported by pdfjs-dist, e.g. "TT1" or "g_d0_f1".
+   * Consistent within a document — use it to distinguish header fonts from
+   * label fonts (they typically differ).
+   */
+  fontName: string;
+}
+
 export interface PdfPage {
   pageNumber: number;
   /** Page width in PDF points. */
@@ -47,6 +65,12 @@ export interface PdfPage {
   /** Page height in PDF points. */
   heightPt: number;
   fields: PdfField[];
+  /**
+   * Static text blocks extracted from the page content stream, sorted
+   * top-to-bottom. Includes headers, labels, and instructions — anything
+   * that is drawn text rather than an AcroForm widget.
+   */
+  textBlocks: TextBlock[];
 }
 
 export interface FpdfMetadata {

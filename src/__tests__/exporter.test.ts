@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { tmpdir } from 'node:os';
 import { writeFile, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
-import { PDFDocument, PDFName, PDFString, PDFRawStream } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, PDFRawStream, PDFDict, PDFRef } from 'pdf-lib';
 import { deflateSync } from 'node:zlib';
 import { exportPdf } from '../exporter.js';
 import { getXfaDatasetsInfo } from '../analyzer.js';
@@ -165,6 +165,13 @@ describe('exportPdf', () => {
     expect(result.getForm().getTextField('firstName').getText()).toBe('First');
   });
 
+  it('falls back to empty string when a boolean value is passed to a text field', async () => {
+    // Covers the `typeof value === 'string' ? value : ''` false branch in setText.
+    // pdf-lib returns undefined for an empty field, so we just verify it doesn't throw.
+    const doc = makeDoc([{ name: 'firstName', type: 'text', value: false as unknown as string }]);
+    await expect(exportPdf(textPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
+  });
+
   it('silently skips field names not present in the PDF', async () => {
     const doc = makeDoc([
       { name: 'nonExistentField', type: 'text', value: 'ignored' },
@@ -307,5 +314,74 @@ describe('exportPdf — XFA datasets patching', () => {
     const result = await PDFDocument.load(bytes);
     const info = getXfaDatasetsInfo(result);
     expect(info?.xml).toContain('<radio>1</radio>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// XFA hybrid PDF — AcroForm radio group translation
+// ---------------------------------------------------------------------------
+
+async function makeXfaHybridWithRadioPdfBytes(): Promise<Uint8Array> {
+  const datasetsXml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">',
+    '  <xfa:data><topmostSubform><agree/></topmostSubform></xfa:data>',
+    '</xfa:datasets>',
+  ].join('\n');
+
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const form = doc.getForm();
+  const rg = form.createRadioGroup('agree');
+  rg.addOptionToPage('Yes', page, { x: 50, y: 700, width: 15, height: 15 });
+  rg.addOptionToPage('No', page, { x: 50, y: 680, width: 15, height: 15 });
+
+  const compressedBytes = deflateSync(Buffer.from(datasetsXml, 'utf-8'));
+  const streamDict = doc.context.obj({
+    Filter: PDFName.of('FlateDecode'),
+    Length: compressedBytes.length,
+  });
+  const stream = PDFRawStream.of(streamDict, compressedBytes);
+  const streamRef = doc.context.register(stream);
+
+  // Inject XFA entry into the AcroForm dict that pdf-lib created for the radio group
+  const acroFormVal = doc.catalog.get(PDFName.of('AcroForm'));
+  const acroForm = acroFormVal instanceof PDFRef ? doc.context.lookup(acroFormVal) : acroFormVal;
+  if (acroForm instanceof PDFDict) {
+    acroForm.set(PDFName.of('XFA'), doc.context.obj([PDFString.of('datasets'), streamRef]));
+  }
+
+  return doc.save({ useObjectStreams: false });
+}
+
+describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
+  let xfaHybridRadioPdfPath: string;
+
+  beforeAll(async () => {
+    const bytes = await makeXfaHybridWithRadioPdfBytes();
+    xfaHybridRadioPdfPath = await writeTempPdf('xfa-hybrid-radio.pdf', bytes);
+  });
+
+  it('selects a radio option by matching the on-value index (isXfa=true path)', async () => {
+    // In pdf-lib, option name == on-value; 'Yes' on-value is '/Yes'.
+    // exportPdf with isXfa=true runs the PDFName translation path.
+    const doc = makeDoc([{ name: 'agree', type: 'radio', value: 'Yes' }]);
+    const bytes = await exportPdf(xfaHybridRadioPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const selected = result.getForm().getRadioGroup('agree').getSelected();
+    expect(selected).toBe('Yes');
+  });
+
+  it('falls back to direct select when on-value is not found; swallows the error if invalid', async () => {
+    // Value '0' is not in the on-values ['/Yes', '/No'] → idx === -1 → fallback
+    // pdfField.select('0') throws (not a valid option name) → caught silently.
+    const doc = makeDoc([{ name: 'agree', type: 'radio', value: '0' }]);
+    // Should not throw even though neither translation nor direct select succeeds
+    await expect(exportPdf(xfaHybridRadioPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  it('skips an XFA radio field when value is an empty string', async () => {
+    const doc = makeDoc([{ name: 'agree', type: 'radio', value: '' }]);
+    await expect(exportPdf(xfaHybridRadioPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
   });
 });

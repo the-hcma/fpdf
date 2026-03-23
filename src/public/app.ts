@@ -192,6 +192,57 @@ function watchInputs(
   });
 }
 
+// ── Zoom ──────────────────────────────────────────────────────────────────────
+
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3.0;
+const ZOOM_STEP = 0.1;
+const ZOOM_STORAGE_KEY = 'fpdf-zoom';
+
+function clampZoom(z: number): number {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+}
+
+function initZoom(): void {
+  const stored = localStorage.getItem(ZOOM_STORAGE_KEY);
+  let zoom = stored ? clampZoom(parseFloat(stored)) : 1.0;
+
+  function applyZoom(): void {
+    const pages = document.getElementById('pages');
+    if (pages) {
+      pages.style.transform = zoom === 1.0 ? '' : `scale(${String(zoom)})`;
+      pages.style.transformOrigin = 'top center';
+    }
+    const label = document.getElementById('zoom-level');
+    if (label) label.textContent = `${String(Math.round(zoom * 100))}%`;
+    localStorage.setItem(ZOOM_STORAGE_KEY, String(zoom));
+  }
+
+  document.getElementById('zoom-in')?.addEventListener('click', () => {
+    zoom = clampZoom(Math.round((zoom + ZOOM_STEP) * 10) / 10);
+    applyZoom();
+  });
+
+  document.getElementById('zoom-out')?.addEventListener('click', () => {
+    zoom = clampZoom(Math.round((zoom - ZOOM_STEP) * 10) / 10);
+    applyZoom();
+  });
+
+  window.addEventListener(
+    'wheel',
+    (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const delta = event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+      zoom = clampZoom(Math.round((zoom + delta) * 10) / 10);
+      applyZoom();
+    },
+    { passive: false },
+  );
+
+  applyZoom();
+}
+
 // ── Toggle ────────────────────────────────────────────────────────────────────
 
 function initToggle(): void {
@@ -218,6 +269,7 @@ function updateToggleLabel(): void {
 
 async function main(): Promise<void> {
   initToggle();
+  initZoom();
   setStatus('Loading…');
 
   let baseText = '';

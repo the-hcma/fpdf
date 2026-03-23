@@ -48,11 +48,16 @@ export function buildProgram(): Command {
 
         // Keep the process alive until SIGINT / SIGTERM
         const shutdown = (): void => {
-          handle.close().catch((err: unknown) => {
-            logger.error(
-              `Server shutdown error: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          });
+          void handle
+            .close()
+            .catch((err: unknown) => {
+              logger.error(
+                `Server shutdown error: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            })
+            .finally(() => {
+              process.exit(0);
+            });
         };
         process.on('SIGINT', shutdown);
         process.on('SIGTERM', shutdown);

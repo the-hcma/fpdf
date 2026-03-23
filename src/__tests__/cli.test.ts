@@ -12,8 +12,15 @@ vi.mock('../analyzer.js', () => ({
   },
 }));
 
+vi.mock('../server.js', () => ({
+  startServer: vi.fn(),
+}));
+
+vi.mock('open', () => ({ default: vi.fn().mockResolvedValue(undefined) }));
+
 vi.mock('node:fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
+  readFile: vi.fn().mockResolvedValue('{}'),
 }));
 
 /**
@@ -76,19 +83,176 @@ describe('CLI program structure', () => {
       vi.restoreAllMocks();
     });
 
-    it('fill action logs error and exits', () => {
-      const program = buildProgram();
-      program.exitOverride();
-      expect(() => program.parse(['node', 'fpdf', 'fill', 'form.pdf'])).toThrow();
-      expect(errorSpy).toHaveBeenCalledWith('fill command not yet implemented');
-      expect(exitSpy).toHaveBeenCalledWith(1);
-    });
-
     it('export action logs error and exits', () => {
       const program = buildProgram();
       program.exitOverride();
       expect(() => program.parse(['node', 'fpdf', 'export', 'form.fpdf.json'])).toThrow();
       expect(errorSpy).toHaveBeenCalledWith('export command not yet implemented');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe('fill command action', () => {
+    let infoSpy: MockInstance;
+    let errorSpy: MockInstance;
+    let exitSpy: MockInstance;
+
+    beforeEach(() => {
+      infoSpy = vi.spyOn(logger, 'info').mockReturnValue(undefined);
+      errorSpy = vi.spyOn(logger, 'error').mockReturnValue(undefined);
+      exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation((_code?: string | number | null) => undefined as never);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('analyzes the PDF, starts the server, and prints the URL', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const mockDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      };
+      vi.mocked(analyzePdf).mockResolvedValue(mockDoc);
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(analyzePdf).toHaveBeenCalledWith(expect.stringContaining('form.pdf'));
+      expect(startServer).toHaveBeenCalled();
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('http://127.0.0.1:12345'));
+      expect(stdoutSpy).toHaveBeenCalledWith('http://127.0.0.1:12345\n');
+
+      stdoutSpy.mockRestore();
+    });
+
+    it('resumes from an existing .fpdf.json when --json is passed', async () => {
+      const { startServer } = await import('../server.js');
+      const { readFile } = await import('node:fs/promises');
+      const mockDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      };
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc) as never);
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf', '--json', 'form.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(readFile).toHaveBeenCalledWith(expect.stringContaining('form.fpdf.json'), 'utf-8');
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Resumed session'));
+      expect(startServer).toHaveBeenCalled();
+
+      stdoutSpy.mockRestore();
+    });
+
+    it('opens the browser when --open is passed', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const openModule = await import('open');
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      });
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf', '--open']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(openModule.default).toHaveBeenCalledWith('http://127.0.0.1:12345');
+    });
+
+    it('logs a stringified error when a non-AnalyzerError is thrown', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      });
+      vi.mocked(startServer).mockRejectedValue('string error');
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('string error');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('logs an error and exits when the server fails to start', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      });
+      vi.mocked(startServer).mockRejectedValue(new Error('port in use'));
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('port in use'));
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });
@@ -129,7 +293,6 @@ describe('CLI program structure', () => {
       const program = buildProgram();
       program.parse(['node', 'fpdf', 'analyze', 'form.pdf']);
 
-      // Give the micro-task queue a chance to settle
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(analyzePdf).toHaveBeenCalledWith('form.pdf');
@@ -137,11 +300,25 @@ describe('CLI program structure', () => {
       expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('form.fpdf.json'));
     });
 
+    it('logs a stringified error when a non-AnalyzerError is thrown', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      vi.mocked(analyzePdf).mockRejectedValue('unexpected string');
+
+      exitSpy.mockImplementation((_code?: string | number | null) => undefined as never);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'analyze', 'missing.pdf']);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('unexpected string');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
     it('logs an error and exits when analyzePdf rejects', async () => {
       const { analyzePdf, AnalyzerError } = await import('../analyzer.js');
       vi.mocked(analyzePdf).mockRejectedValue(new AnalyzerError('file not found'));
 
-      // Use a non-throwing mock so the thrown error doesn't escape the async handler.
       exitSpy.mockImplementation((_code?: string | number | null) => undefined as never);
 
       const program = buildProgram();

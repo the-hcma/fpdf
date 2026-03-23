@@ -60,10 +60,11 @@ fpdf/
       "heightPt": 792,
       "fields": [
         {
-          "id": "field_0",
-          "name": "FirstName",
+          "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+          "name": "topmostSubform[0].Page1[0]._6_Date_of_Birth_MMDDCCYY[0]",
           "type": "text",
-          "label": "First Name",
+          "label": "6 Date of Birth MMDDCCYY",
+          "displayName": "Date of Birth",
           "placement": {
             "x": 144.0,
             "y": 600.0,
@@ -82,6 +83,10 @@ fpdf/
 ```
 
 ### Field notes
+- `id` is a UUID generated at analysis time — stable across re-analyses of the same PDF
+- `name` is the raw AcroForm field name as embedded in the PDF (may be an XFA-style path)
+- `label` is a derived, number-prefixed label useful for cross-referencing the paper form (e.g. `"6 Date of Birth MMDDCCYY"`)
+- `displayName` is a cleaned-up version of the label for UI rendering — strips the field number, format hints like `MMDDCCYY`, back-references like `in 4`, and trailing address/name format fragments (e.g. `"Date of Birth"`)
 - `placement` is in **PDF coordinate space** (points, bottom-left origin) — the UI transforms these to CSS positions
 - `options` is populated for dropdowns and radio groups
 - `value` is what the user fills in (string for text/select, boolean for checkboxes)

@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import express from 'express';
@@ -54,6 +55,8 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   // Live in-memory doc that WebSocket clients can update
   let liveDoc = doc;
+  // Suppresses the fs.watch echo triggered by the server's own writeFile.
+  let ignoringNextChange = false;
 
   // --- FpdfDocument JSON ---
   app.get('/doc', (_req, res) => {
@@ -120,6 +123,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
         liveDoc = msg.doc as FpdfDocument;
         const { writeFile } = await import('node:fs/promises');
+        ignoringNextChange = true;
         await writeFile(jsonPath, JSON.stringify(liveDoc, null, 2), 'utf-8');
         ws.send(JSON.stringify({ type: 'saved', updatedAt: new Date().toISOString() }));
         logger.debug(`Saved ${jsonPath}`);
@@ -132,6 +136,45 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
     ws.on('close', () => {
       logger.debug('WebSocket client disconnected');
+    });
+  });
+
+  // --- JSON file watcher ---
+  // Reloads liveDoc and notifies all clients when the .fpdf.json is edited externally.
+
+  function broadcast(msg: string): void {
+    for (const client of wss.clients) {
+      if (client.readyState === 1 /* OPEN */) client.send(msg);
+    }
+  }
+
+  // Watch the parent directory so atomic renames (write-to-temp + rename) are detected.
+  // Watching the file inode directly breaks when the file is replaced atomically.
+  const jsonDir = path.dirname(jsonPath);
+  const jsonFilename = path.basename(jsonPath);
+
+  const jsonWatcher = watch(jsonDir, (_event, filename) => {
+    // filename can be null on some platforms even when watching a directory;
+    // treat null as "unknown file changed" and attempt the reload anyway.
+    if (filename !== null && filename !== jsonFilename) return;
+    if (ignoringNextChange) {
+      ignoringNextChange = false;
+      return;
+    }
+    const reload = async (): Promise<void> => {
+      let text: string;
+      try {
+        text = await readFile(jsonPath, 'utf-8');
+      } catch {
+        // File transiently absent (atomic rename in progress) — skip; next event will succeed.
+        return;
+      }
+      liveDoc = JSON.parse(text) as FpdfDocument;
+      broadcast(JSON.stringify({ type: 'docReload', doc: liveDoc }));
+      logger.debug(`Reloaded liveDoc from ${jsonPath}`);
+    };
+    reload().catch((err: unknown) => {
+      logger.error(`JSON reload error: ${err instanceof Error ? err.message : String(err)}`);
     });
   });
 
@@ -148,6 +191,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   const close = (): Promise<void> =>
     new Promise((resolve, reject) => {
+      jsonWatcher.close();
       for (const client of wss.clients) {
         client.terminate();
       }

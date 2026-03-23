@@ -70,12 +70,20 @@ export interface PdfField {
    */
   tooltip?: string;
   placement: Placement;
-  /** Current fill value. String for text/select, boolean for checkbox/radio. */
+  /** Current fill value. String for text/select/radio, boolean for checkbox. */
   value: string | boolean;
   required: boolean;
   readOnly: boolean;
   /** Populated for 'select' and 'radio' fields. */
   options: string[];
+  /**
+   * For `type: 'radio'` only — the specific option (on-value) this widget
+   * represents, e.g. `"0"` or `"1"`.  The group's current selection is stored
+   * in `value` (same across all widgets for the same radio group name).
+   * Allows the UI to render each radio button correctly and store the selected
+   * option string rather than a boolean.
+   */
+  radioValue?: string;
 }
 
 /**

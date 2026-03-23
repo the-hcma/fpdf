@@ -3,8 +3,10 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { tmpdir } from 'node:os';
 import { writeFile, mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, PDFRawStream } from 'pdf-lib';
+import { deflateSync } from 'node:zlib';
 import { exportPdf } from '../exporter.js';
+import { getXfaDatasetsInfo } from '../analyzer.js';
 import type { FpdfDocument, PdfField } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -198,5 +200,112 @@ describe('exportPdf', () => {
 
     const bytes = await exportPdf(textPdfPath, doc);
     expect(Buffer.from(bytes.slice(0, 4)).toString()).toBe('%PDF');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// XFA datasets patching
+// ---------------------------------------------------------------------------
+
+async function makeXfaPdfBytes(): Promise<Uint8Array> {
+  const datasetsXml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">',
+    '  <xfa:data>',
+    '    <topmostSubform>',
+    '      <firstName/>',
+    '      <lastName/>',
+    '    </topmostSubform>',
+    '  </xfa:data>',
+    '</xfa:datasets>',
+  ].join('\n');
+
+  const doc = await PDFDocument.create();
+  doc.addPage([612, 792]);
+
+  const compressedBytes = deflateSync(Buffer.from(datasetsXml, 'utf-8'));
+  const streamDict = doc.context.obj({
+    Filter: PDFName.of('FlateDecode'),
+    Length: compressedBytes.length,
+  });
+  const stream = PDFRawStream.of(streamDict, compressedBytes);
+  const streamRef = doc.context.register(stream);
+
+  doc.catalog.set(
+    PDFName.of('AcroForm'),
+    doc.context.obj({
+      XFA: doc.context.obj([PDFString.of('datasets'), streamRef]),
+      Fields: doc.context.obj([]),
+    }),
+  );
+
+  return doc.save();
+}
+
+describe('exportPdf — XFA datasets patching', () => {
+  let xfaPdfPath: string;
+
+  beforeAll(async () => {
+    const bytes = await makeXfaPdfBytes();
+    xfaPdfPath = await writeTempPdf('xfa-datasets.pdf', bytes);
+  });
+
+  it('patches firstName and lastName in the XFA datasets XML', async () => {
+    const doc = makeDoc([
+      { name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Alice' },
+      { name: 'topmostSubform.Page1.lastName', type: 'text', value: 'Smith' },
+    ]);
+
+    const bytes = await exportPdf(xfaPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const info = getXfaDatasetsInfo(result);
+    expect(info).not.toBeNull();
+    expect(info?.xml).toContain('<firstName>Alice</firstName>');
+    expect(info?.xml).toContain('<lastName>Smith</lastName>');
+  });
+
+  it('exports successfully even when AcroForm has no matching fields', async () => {
+    // XFA-only fields won't be found by form.getField(); export must still succeed
+    const doc = makeDoc([{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Bob' }]);
+    await expect(exportPdf(xfaPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  it('returns a valid PDF when XFA datasets are patched', async () => {
+    const doc = makeDoc([{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Carol' }]);
+    const bytes = await exportPdf(xfaPdfPath, doc);
+    expect(Buffer.from(bytes.slice(0, 4)).toString()).toBe('%PDF');
+  });
+
+  it('escapes XML special chars in field values', async () => {
+    const doc = makeDoc([{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'A & B' }]);
+    const bytes = await exportPdf(xfaPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const info = getXfaDatasetsInfo(result);
+    expect(info?.xml).toContain('<firstName>A &amp; B</firstName>');
+  });
+
+  it('inserts absent elements into their parent when the element is not in the initial XML', async () => {
+    // The fixture XML has <firstName/> and <lastName/> inside <topmostSubform>
+    // but no <radio> element.  A field whose parent leaf is 'topmostSubform'
+    // should be inserted there.
+    const doc = makeDoc([{ name: 'topmostSubform.radio', type: 'radio', value: '1' }]);
+    const bytes = await exportPdf(xfaPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const info = getXfaDatasetsInfo(result);
+    expect(info?.xml).toContain('<radio>1</radio>');
+  });
+
+  it('inserts absent elements by walking up to a grandparent when the direct parent is absent', async () => {
+    // Real XFA PDFs often have deep template nesting (e.g. Page1[0].#subform[3].field[0])
+    // but flat datasets XML where all data lives under <topmostSubform> directly.
+    // The insertion fallback must skip missing intermediate elements and insert at the
+    // first ancestor whose closing tag exists in the XML.
+    // Here: 'topmostSubform.Page1.radio' — <Page1> is absent from the fixture XML,
+    // so the fallback should walk up to <topmostSubform> and insert there.
+    const doc = makeDoc([{ name: 'topmostSubform.Page1.radio', type: 'radio', value: '1' }]);
+    const bytes = await exportPdf(xfaPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const info = getXfaDatasetsInfo(result);
+    expect(info?.xml).toContain('<radio>1</radio>');
   });
 });

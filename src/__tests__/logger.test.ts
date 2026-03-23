@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { logger } from '../logger.js';
+import { logger, installWarnFilter, withSilencedWarn } from '../logger.js';
 
 describe('logger', () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
@@ -58,5 +58,48 @@ describe('logger', () => {
     logger.debug('verbose', { trace: true });
     expect(stderrSpy).toHaveBeenNthCalledWith(1, '[fpdf:debug] verbose\n');
     expect(stderrSpy).toHaveBeenNthCalledWith(2, '[{"trace":true}]\n');
+  });
+
+  it('writes error extra args as JSON on a separate line', () => {
+    logger.error('something broke', { code: 42 });
+    expect(stderrSpy).toHaveBeenNthCalledWith(1, '[fpdf:error] something broke\n');
+    expect(stderrSpy).toHaveBeenNthCalledWith(2, '[{"code":42}]\n');
+  });
+});
+
+describe('installWarnFilter', () => {
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('suppresses the pdf-lib XFA warning', () => {
+    installWarnFilter();
+    // eslint-disable-next-line no-console
+    console.warn('Removing XFA form data as pdf-lib does not support reading or writing XFA');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('passes through unrelated console.warn messages', () => {
+    installWarnFilter();
+    // eslint-disable-next-line no-console
+    console.warn('some other warning');
+    expect(warnSpy).toHaveBeenCalledWith('some other warning');
+  });
+});
+
+describe('withSilencedWarn', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('runs the provided function and returns its result', async () => {
+    const result = await withSilencedWarn(() => Promise.resolve(42));
+    expect(result).toBe(42);
   });
 });

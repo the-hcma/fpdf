@@ -1,8 +1,10 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { tmpdir } from 'node:os';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { writeFile, mkdir, stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, PDFRawStream, StandardFonts, rgb } from 'pdf-lib';
+import { deflateSync } from 'node:zlib';
 import {
   analyzePdf,
   AnalyzerError,
@@ -10,6 +12,11 @@ import {
   deriveDisplayName,
   detectPageType,
   detectCandidateFields,
+  extractOrphanWidgets,
+  xfaLeafName,
+  getXfaDatasetsInfo,
+  parseXfaDatasetValues,
+  patchXfaDatasetsXml,
 } from '../analyzer.js';
 
 // ---------------------------------------------------------------------------
@@ -50,6 +57,7 @@ let buttonPdfPath: string;
 let vectorLinePdfPath: string;
 let vectorRectPdfPath: string;
 let rasterPdfPath: string;
+let orphanWidgetPdfPath: string;
 
 beforeAll(async () => {
   // 1. PDF with no AcroForm fields
@@ -232,6 +240,28 @@ beforeAll(async () => {
     page.drawImage(img, { x: 100, y: 100, width: 200, height: 200 });
   });
   rasterPdfPath = await writeTempPdf('raster.pdf', rasterBytes);
+
+  // Orphan widget: a Widget annotation on a page not linked via /AcroForm
+  // We create it using pdf-lib's low-level API so form.getFields() finds nothing.
+  const orphanBytes = await makePdfBytes((doc) => {
+    const page = doc.addPage([612, 792]);
+
+    // Build a Widget dict manually: /FT /Tx, /T "orphanField", /Rect [50 700 250 720]
+    const widgetRef = doc.context.register(
+      doc.context.obj({
+        Type: PDFName.of('Annot'),
+        Subtype: PDFName.of('Widget'),
+        FT: PDFName.of('Tx'),
+        T: PDFString.of('orphanField'),
+        Rect: [50, 700, 250, 720],
+        V: PDFString.of('prefilled'),
+      }),
+    );
+
+    // Add the widget to the page's /Annots — not linked via /AcroForm
+    page.node.set(PDFName.of('Annots'), doc.context.obj([widgetRef]));
+  });
+  orphanWidgetPdfPath = await writeTempPdf('orphan-widget.pdf', orphanBytes);
 });
 
 // ---------------------------------------------------------------------------
@@ -828,5 +858,339 @@ describe('detectCandidateFields unit', () => {
     );
     expect(result[0]?.confidence).toBe('high');
     expect(result[0]?.label).toBe('Full Name');
+  });
+
+  it('caps confidence at low for flat horizontal lines (h < MIN_VISIBLE_HEIGHT)', () => {
+    // A horizontal line: width=150, height=0 → bboxToBox normalises h to 1pt
+    // Even with a matching label it must be low confidence (not a visible rectangle).
+    const textBlocks = [
+      {
+        text: 'Signature',
+        placement: { x: 50, y: 680, width: 60, height: 10 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+    ];
+    // OPS.rectangle = 19, OPS.stroke = 20 — height=0 (flat line)
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 150, 0], []] },
+      textBlocks,
+      612,
+    );
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0]?.confidence).toBe('low');
+  });
+
+  it('caps confidence at low for vertical lines (w = 0, h tall)', () => {
+    // A vertical table rule: width=0, height=31 — not a visible rectangle.
+    const textBlocks = [
+      {
+        text: 'PRESCRIPTION INFORMATION',
+        placement: { x: 300, y: 360, width: 150, height: 10 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+    ];
+    // OPS.rectangle = 19, OPS.stroke = 20 — width=0 (vertical line)
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[372, 342, 0, 31], []] },
+      textBlocks,
+      612,
+    );
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0]?.confidence).toBe('low');
+  });
+});
+
+describe('orphan widget extraction (integration)', () => {
+  it('analyzePdf finds the orphan field that form.getFields() misses', async () => {
+    const doc = await analyzePdf(orphanWidgetPdfPath);
+    const fields = doc.pages[0]?.fields ?? [];
+    expect(fields.some((f) => f.name === 'orphanField')).toBe(true);
+  });
+
+  it('orphan widget page is classified as acroform', async () => {
+    const doc = await analyzePdf(orphanWidgetPdfPath);
+    expect(doc.pages[0]?.pageType).toBe('acroform');
+  });
+
+  it('orphan field has type text', async () => {
+    const doc = await analyzePdf(orphanWidgetPdfPath);
+    const field = (doc.pages[0]?.fields ?? []).find((f) => f.name === 'orphanField');
+    expect(field?.type).toBe('text');
+  });
+
+  it('orphan field captures the pre-filled value', async () => {
+    const doc = await analyzePdf(orphanWidgetPdfPath);
+    const field = (doc.pages[0]?.fields ?? []).find((f) => f.name === 'orphanField');
+    expect(field?.value).toBe('prefilled');
+  });
+
+  it('orphan field placement matches the Rect in the fixture', async () => {
+    const doc = await analyzePdf(orphanWidgetPdfPath);
+    const field = (doc.pages[0]?.fields ?? []).find((f) => f.name === 'orphanField');
+    expect(field?.placement.x).toBeCloseTo(50, 0);
+    expect(field?.placement.y).toBeCloseTo(700, 0);
+    expect(field?.placement.width).toBeCloseTo(200, 0);
+    expect(field?.placement.height).toBeCloseTo(20, 0);
+  });
+
+  it('orphan page has empty candidateFields (acroform suppresses vector detection)', async () => {
+    const doc = await analyzePdf(orphanWidgetPdfPath);
+    expect(doc.pages[0]?.candidateFields).toEqual([]);
+  });
+});
+
+describe('extractOrphanWidgets unit', () => {
+  it('returns empty array for a page with no annotations', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]);
+    const result = extractOrphanWidgets(doc, 1, new Set());
+    expect(result).toEqual([]);
+  });
+
+  it('skips non-Widget annotations', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const annotRef = doc.context.register(
+      doc.context.obj({ Type: PDFName.of('Annot'), Subtype: PDFName.of('Link') }),
+    );
+    page.node.set(PDFName.of('Annots'), doc.context.obj([annotRef]));
+    const result = extractOrphanWidgets(doc, 1, new Set());
+    expect(result).toEqual([]);
+  });
+
+  it('does not return a widget whose name is already in knownNames', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const annotRef = doc.context.register(
+      doc.context.obj({
+        Type: PDFName.of('Annot'),
+        Subtype: PDFName.of('Widget'),
+        FT: PDFName.of('Tx'),
+        T: PDFString.of('knownField'),
+        Rect: [50, 700, 250, 720],
+      }),
+    );
+    page.node.set(PDFName.of('Annots'), doc.context.obj([annotRef]));
+    const result = extractOrphanWidgets(doc, 1, new Set(['knownField']));
+    expect(result).toHaveLength(0);
+  });
+
+  it('extracts a text widget with correct placement', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const annotRef = doc.context.register(
+      doc.context.obj({
+        Type: PDFName.of('Annot'),
+        Subtype: PDFName.of('Widget'),
+        FT: PDFName.of('Tx'),
+        T: PDFString.of('myField'),
+        Rect: [50, 700, 250, 720],
+        V: PDFString.of('hello'),
+      }),
+    );
+    page.node.set(PDFName.of('Annots'), doc.context.obj([annotRef]));
+    const result = extractOrphanWidgets(doc, 1, new Set());
+    expect(result).toHaveLength(1);
+    expect(result[0]?.name).toBe('myField');
+    expect(result[0]?.type).toBe('text');
+    expect(result[0]?.value).toBe('hello');
+    expect(result[0]?.placement.width).toBeCloseTo(200, 0);
+  });
+
+  it('skips a read-only widget (Ff bit 0 set)', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const annotRef = doc.context.register(
+      doc.context.obj({
+        Type: PDFName.of('Annot'),
+        Subtype: PDFName.of('Widget'),
+        FT: PDFName.of('Tx'),
+        T: PDFString.of('roField'),
+        Rect: [50, 700, 250, 720],
+        Ff: 1, // bit 0 = ReadOnly
+      }),
+    );
+    page.node.set(PDFName.of('Annots'), doc.context.obj([annotRef]));
+    const result = extractOrphanWidgets(doc, 1, new Set());
+    expect(result).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// XFA utilities
+// ---------------------------------------------------------------------------
+
+describe('xfaLeafName', () => {
+  it('extracts leaf from a full XFA path with array indices', () => {
+    expect(xfaLeafName('topmostSubform[0].Page1[0].firstName[0]')).toBe('firstName');
+  });
+
+  it('returns the name unchanged when there are no dots', () => {
+    expect(xfaLeafName('firstName')).toBe('firstName');
+  });
+
+  it('strips the trailing array index', () => {
+    expect(xfaLeafName('a.b.c[0]')).toBe('c');
+  });
+
+  it('handles a two-segment path without array index', () => {
+    expect(xfaLeafName('page.field')).toBe('field');
+  });
+});
+
+describe('parseXfaDatasetValues', () => {
+  it('extracts non-empty text element values', () => {
+    const xml = [
+      '<xfa:datasets>',
+      '  <xfa:data>',
+      '    <topmostSubform>',
+      '      <firstName>Alice</firstName>',
+      '      <lastName/>',
+      '      <city>New York</city>',
+      '    </topmostSubform>',
+      '  </xfa:data>',
+      '</xfa:datasets>',
+    ].join('\n');
+    const values = parseXfaDatasetValues(xml);
+    expect(values.get('firstName')).toBe('Alice');
+    expect(values.has('lastName')).toBe(false); // self-closing, no content
+    expect(values.get('city')).toBe('New York');
+  });
+
+  it('unescapes XML entities in values', () => {
+    const xml = '<root><field>A &amp; B &lt;test&gt;</field></root>';
+    const values = parseXfaDatasetValues(xml);
+    expect(values.get('field')).toBe('A & B <test>');
+  });
+
+  it('returns an empty map for XML with no text content', () => {
+    const xml = '<xfa:data><topmostSubform><a/><b/></topmostSubform></xfa:data>';
+    expect(parseXfaDatasetValues(xml).size).toBe(0);
+  });
+});
+
+describe('patchXfaDatasetsXml', () => {
+  it('replaces self-closing elements', () => {
+    const xml = '<topmostSubform><firstName/><lastName/></topmostSubform>';
+    const values = new Map<string, string | boolean>([
+      ['firstName', 'Alice'],
+      ['lastName', 'Smith'],
+    ]);
+    const result = patchXfaDatasetsXml(xml, values);
+    expect(result).toContain('<firstName>Alice</firstName>');
+    expect(result).toContain('<lastName>Smith</lastName>');
+    expect(result).not.toContain('<firstName/>');
+  });
+
+  it('replaces elements with existing content', () => {
+    const xml = '<root><field>Old</field></root>';
+    const values = new Map<string, string | boolean>([['field', 'New']]);
+    const result = patchXfaDatasetsXml(xml, values);
+    expect(result).toContain('<field>New</field>');
+    expect(result).not.toContain('Old');
+  });
+
+  it('converts boolean true to "1" and false to "0"', () => {
+    const xml = '<root><check/></root>';
+    const values = new Map<string, string | boolean>([['check', true]]);
+    expect(patchXfaDatasetsXml(xml, values)).toContain('<check>1</check>');
+    values.set('check', false);
+    expect(patchXfaDatasetsXml(xml.replace('<check>1</check>', '<check/>'), values)).toContain(
+      '<check>0</check>',
+    );
+  });
+
+  it('escapes XML special chars in values', () => {
+    const xml = '<root><name/></root>';
+    const values = new Map<string, string | boolean>([['name', 'A & B <C>']]);
+    const result = patchXfaDatasetsXml(xml, values);
+    expect(result).toContain('<name>A &amp; B &lt;C&gt;</name>');
+  });
+
+  it('uses the leaf name from a dotted field path', () => {
+    const xml = '<root><city/></root>';
+    const values = new Map<string, string | boolean>([
+      ['topmostSubform[0].Page1[0].city[0]', 'Boston'],
+    ]);
+    const result = patchXfaDatasetsXml(xml, values);
+    expect(result).toContain('<city>Boston</city>');
+  });
+});
+
+describe('getXfaDatasetsInfo', () => {
+  it('returns null for a PDF with no XFA', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage();
+    expect(getXfaDatasetsInfo(doc)).toBeNull();
+  });
+
+  it('returns the ref and decoded XML for a synthetic XFA PDF', async () => {
+    const datasetsXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/">',
+      '  <xfa:data><topmostSubform><firstName/></topmostSubform></xfa:data>',
+      '</xfa:datasets>',
+    ].join('\n');
+
+    const doc = await PDFDocument.create();
+    doc.addPage([612, 792]);
+
+    const compressedBytes = deflateSync(Buffer.from(datasetsXml, 'utf-8'));
+    const streamDict = doc.context.obj({
+      Filter: PDFName.of('FlateDecode'),
+      Length: compressedBytes.length,
+    });
+    const stream = PDFRawStream.of(streamDict, compressedBytes);
+    const streamRef = doc.context.register(stream);
+
+    doc.catalog.set(
+      PDFName.of('AcroForm'),
+      doc.context.obj({
+        XFA: doc.context.obj([PDFString.of('datasets'), streamRef]),
+        Fields: doc.context.obj([]),
+      }),
+    );
+
+    const saved = await doc.save();
+    const loaded = await PDFDocument.load(saved);
+    const info = getXfaDatasetsInfo(loaded);
+    expect(info).not.toBeNull();
+    expect(info?.xml).toContain('<firstName/>');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// XFA integration — Cigna PDF (skipped if file absent)
+// ---------------------------------------------------------------------------
+
+describe('XFA integration (Cigna PDF)', () => {
+  const cignaPath = path.join(homedir(), 'Downloads', 'cigna-medical-form-medical-claim.pdf');
+  let exists = false;
+
+  beforeAll(async () => {
+    try {
+      await stat(cignaPath);
+      exists = true;
+    } catch {
+      // file absent — tests will be skipped
+    }
+  });
+
+  it('analyzes the Cigna PDF and finds XFA-backed fields via orphan widget walk', async () => {
+    if (!exists) return;
+    const result = await analyzePdf(cignaPath);
+    const allFields = result.pages.flatMap((p) => p.fields);
+    expect(allFields.length).toBeGreaterThan(10);
+  });
+
+  it('extracts XFA datasets info from the Cigna PDF', async () => {
+    if (!exists) return;
+    const bytes = await import('node:fs/promises').then((m) => m.readFile(cignaPath));
+    const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    const info = getXfaDatasetsInfo(pdfDoc);
+    expect(info).not.toBeNull();
+    expect(info?.xml).toContain('topmostSubform');
   });
 });

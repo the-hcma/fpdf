@@ -72,9 +72,9 @@ describe('CLI program structure', () => {
     expect(opt).toBeDefined();
   });
 
-  it('has three top-level commands and no more', () => {
+  it('has four top-level commands and no more', () => {
     const program = buildProgram();
-    expect(program.commands).toHaveLength(3);
+    expect(program.commands).toHaveLength(4);
   });
 
   describe('export command action', () => {
@@ -306,6 +306,120 @@ describe('CLI program structure', () => {
       expect(openModule.default).toHaveBeenCalledWith('http://127.0.0.1:12345');
     });
 
+    it('does not warn when the doc has fillable fields', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const { readFile } = await import('node:fs/promises');
+      // Ensure fill triggers fresh analysis (not resume), regardless of prior test state.
+      vi.mocked(readFile).mockRejectedValue(
+        Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }),
+      );
+      const warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform',
+            fields: [
+              {
+                id: 'f1',
+                name: 'Name',
+                type: 'text',
+                label: 'Name',
+                displayName: 'Name',
+                placement: { x: 50, y: 700, width: 150, height: 14 },
+                value: '',
+                required: false,
+                readOnly: false,
+                options: [],
+              },
+            ],
+            candidateFields: [],
+            textBlocks: [],
+          },
+        ],
+      });
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('No fillable fields'));
+      stdoutSpy.mockRestore();
+    });
+
+    it('warns when the doc has no usable fields', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const { readFile } = await import('node:fs/promises');
+      vi.mocked(readFile).mockRejectedValue(
+        Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }),
+      );
+      const warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'hybrid',
+            fields: [],
+            // Only checkbox candidates at medium/high — should still warn (checkboxes don't count)
+            candidateFields: [
+              {
+                id: 'c1',
+                type: 'checkbox',
+                label: 'Emergency',
+                displayName: 'Emergency',
+                placement: { x: 30, y: 650, width: 12, height: 12 },
+                value: '',
+                confidence: 'high',
+                dismissed: false,
+              },
+            ],
+            textBlocks: [],
+          },
+        ],
+      });
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No fillable fields'));
+      stdoutSpy.mockRestore();
+    });
+
     it('logs a stringified error when a non-AnalyzerError is thrown', async () => {
       const { analyzePdf } = await import('../analyzer.js');
       const { startServer } = await import('../server.js');
@@ -398,6 +512,96 @@ describe('CLI program structure', () => {
       expect(analyzePdf).toHaveBeenCalledWith('form.pdf');
       expect(writeFile).toHaveBeenCalled();
       expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('form.fpdf.json'));
+    });
+
+    it('does not warn when the doc has fillable fields', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { writeFile } = await import('node:fs/promises');
+      const warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform',
+            fields: [
+              {
+                id: 'f1',
+                name: 'N',
+                type: 'text',
+                label: 'N',
+                displayName: 'N',
+                placement: { x: 0, y: 0, width: 100, height: 14 },
+                value: '',
+                required: false,
+                readOnly: false,
+                options: [],
+              },
+            ],
+            candidateFields: [],
+            textBlocks: [],
+          },
+        ],
+      });
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'analyze', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('No fillable fields'));
+      void writeFile;
+    });
+
+    it('warns when the doc has no usable fields', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { writeFile } = await import('node:fs/promises');
+      const warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'vector',
+            fields: [],
+            candidateFields: [
+              {
+                id: 'c1',
+                type: 'text',
+                label: '',
+                displayName: '',
+                placement: { x: 50, y: 670, width: 150, height: 1 },
+                value: '',
+                confidence: 'low',
+                dismissed: false,
+              },
+            ],
+            textBlocks: [],
+          },
+        ],
+      });
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'analyze', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No fillable fields'));
+      void writeFile;
     });
 
     it('logs a stringified error when a non-AnalyzerError is thrown', async () => {

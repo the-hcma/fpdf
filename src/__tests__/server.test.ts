@@ -30,6 +30,7 @@ const MOCK_DOC: FpdfDocument = {
       pageNumber: 1,
       widthPt: 612,
       heightPt: 792,
+      pageType: 'acroform' as const,
       fields: [
         {
           id: 'a1b2c3d4-0000-0000-0000-000000000001',
@@ -44,6 +45,7 @@ const MOCK_DOC: FpdfDocument = {
           options: [],
         },
       ],
+      candidateFields: [],
       textBlocks: [],
     },
   ],

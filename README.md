@@ -101,4 +101,6 @@ npm run check          # full pre-commit check
 
 ## License
 
-MIT
+Copyright (c) 2026 Henrique Andrade
+
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). Free for noncommercial use.

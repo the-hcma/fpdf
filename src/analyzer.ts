@@ -3,9 +3,11 @@ import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   PDFDocument,
+  PDFButton,
   PDFCheckBox,
   PDFDropdown,
   PDFRadioGroup,
+  PDFSignature,
   PDFTextField,
   type PDFField,
 } from 'pdf-lib';
@@ -95,12 +97,15 @@ export function deriveDisplayName(label: string): string {
   return result.length > 0 ? result : label;
 }
 
-function fieldTypeFor(field: PDFField): FieldType {
+/** Returns null for field types that should be skipped entirely (buttons, signatures). */
+function fieldTypeFor(field: PDFField): FieldType | null {
   if (field instanceof PDFTextField) return field.isMultiline() ? 'textarea' : 'text';
   if (field instanceof PDFCheckBox) return 'checkbox';
   if (field instanceof PDFRadioGroup) return 'radio';
   if (field instanceof PDFDropdown) return 'select';
-  return 'text'; // PDFOptionList, PDFButton, PDFSignature → best-effort fallback
+  if (field instanceof PDFButton) return null; // image / push-button widget
+  if (field instanceof PDFSignature) return null; // signature widget
+  return 'text'; // PDFOptionList → best-effort fallback
 }
 
 function fieldValue(field: PDFField): string | boolean {
@@ -171,6 +176,8 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
 
   for (const field of rawFields) {
     const type = fieldTypeFor(field);
+    if (type === null) continue; // skip button/signature widgets
+    if (field.isReadOnly()) continue; // skip display-only fields
     const value = fieldValue(field);
     const options = fieldOptions(field);
     const widgets = field.acroField.getWidgets();

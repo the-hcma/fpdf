@@ -16,13 +16,15 @@ export interface Placement {
 }
 
 export interface PdfField {
-  /** Stable ID, e.g. "field_0". */
+  /** Stable UUID for this field widget. */
   id: string;
   /** AcroForm field name as embedded in the PDF. */
   name: string;
   type: FieldType;
-  /** Human-readable label inferred from the PDF (may be empty). */
+  /** Derived label including the form field number, e.g. "6 Date of Birth". */
   label: string;
+  /** Cleaned-up display name for UI rendering, e.g. "Date of Birth". */
+  displayName: string;
   placement: Placement;
   /** Current fill value. String for text/select, boolean for checkbox/radio. */
   value: string | boolean;

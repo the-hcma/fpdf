@@ -6,6 +6,44 @@
 
 export type FieldType = 'text' | 'textarea' | 'checkbox' | 'radio' | 'select';
 
+/**
+ * Classification of a PDF page based on its content stream operators.
+ * Determines which extractors run and whether fields are editable or exportable.
+ *
+ * acroform   — has AcroForm fields (pdf-lib); editable + exportable to PDF
+ * vector     — digitally created, no AcroForm; editable via candidateFields, not exportable
+ * raster     — scanned image only; no fields detected, not editable
+ * raster+ocr — scanned image with embedded OCR text layer; not editable
+ * hybrid     — images + vector paths; editable via candidateFields, not exportable
+ */
+export type PageType = 'acroform' | 'vector' | 'raster' | 'raster+ocr' | 'hybrid';
+
+/** How likely a detected vector path candidate is a real form field. */
+export type CandidateFieldConfidence = 'high' | 'medium' | 'low';
+
+/**
+ * A form field candidate detected from vector paths (lines, rectangles) in the
+ * page content stream. Used for non-AcroForm PDFs where "write here" areas are
+ * drawn rather than declared as AcroForm widgets.
+ *
+ * CandidateFields are never written back to the PDF (no AcroForm backing) —
+ * values are saved only in the .fpdf.json file.
+ */
+export interface CandidateField {
+  /** Stable UUID generated at analysis time. */
+  id: string;
+  type: 'text' | 'textarea' | 'checkbox';
+  /** Derived from the nearest TextBlock above or to the left of the path. Empty if none found. */
+  label: string;
+  displayName: string;
+  placement: Placement;
+  value: string | boolean;
+  /** Likelihood that this detected path is a real form field, not a decorative rule. */
+  confidence: CandidateFieldConfidence;
+  /** True when the user has explicitly dismissed this candidate. Hidden in UI; preserved in JSON. */
+  dismissed: boolean;
+}
+
 export interface Placement {
   /** Left edge of the field in PDF points (bottom-left origin). */
   x: number;
@@ -64,7 +102,17 @@ export interface PdfPage {
   widthPt: number;
   /** Page height in PDF points. */
   heightPt: number;
+  /**
+   * Classification based on the pdfjs-dist operator list.
+   * Drives which extractors ran and what the UI can offer.
+   */
+  pageType: PageType;
   fields: PdfField[];
+  /**
+   * Form field candidates detected from vector paths (lines, rectangles).
+   * Empty for pure AcroForm pages. Never written back to the PDF.
+   */
+  candidateFields: CandidateField[];
   /**
    * Static text blocks extracted from the page content stream, sorted
    * top-to-bottom. Includes headers, labels, and instructions — anything

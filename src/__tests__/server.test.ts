@@ -263,7 +263,7 @@ describe('startServer', () => {
         pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ExternalEdit' }] }],
       };
 
-      // Flush any pending watcher callbacks from prior save operations (ignoringNextChange reset)
+      // Let any pending watcher callbacks from prior save operations settle.
       await new Promise<void>((resolve) => setTimeout(resolve, 200));
 
       const reloadMsg = await new Promise<{ type: string; doc: FpdfDocument }>(
@@ -299,7 +299,7 @@ describe('startServer', () => {
       expect(body.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
     });
 
-    it('does not broadcast docReload when the server itself writes the file (ignoringNextChange)', async () => {
+    it('does not broadcast docReload when the server itself writes the file', async () => {
       const mockPage = MOCK_DOC.pages[0];
       const mockField = mockPage?.fields[0];
       if (!mockPage || !mockField) throw new Error('fixture missing page/field');

@@ -72,8 +72,17 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   // Live in-memory doc that WebSocket clients can update
   let liveDoc = doc;
-  // Suppresses the fs.watch echo triggered by the server's own writeFile.
-  let ignoringNextChange = false;
+  // Content of the last server-initiated write.  The file watcher compares the
+  // reloaded content against this string to detect its own echo: if they match,
+  // the event was caused by the server itself and the reload is skipped.
+  //
+  // A content-hash guard is more reliable than a boolean flag on macOS: if
+  // FSEvents coalesces two file-write events into one (a known FSEvents
+  // behaviour), the watcher reads the LATEST content.  When that latest content
+  // differs from what the server last wrote (i.e. an external edit has since
+  // landed), the reload correctly fires.  A boolean would have been consumed by
+  // the coalesced event and silently suppressed the external reload.
+  let lastServerWriteContent: string | null = null;
 
   // --- FpdfDocument JSON ---
   app.get('/doc', (_req, res) => {
@@ -140,8 +149,8 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
         liveDoc = msg.doc as FpdfDocument;
         const { writeFile } = await import('node:fs/promises');
-        ignoringNextChange = true;
-        await writeFile(jsonPath, JSON.stringify(liveDoc, null, 2), 'utf-8');
+        lastServerWriteContent = JSON.stringify(liveDoc, null, 2);
+        await writeFile(jsonPath, lastServerWriteContent, 'utf-8');
         ws.send(JSON.stringify({ type: 'saved', updatedAt: new Date().toISOString() }));
         logger.debug(`Saved ${jsonPath}`);
       };
@@ -174,10 +183,6 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     // filename can be null on some platforms even when watching a directory;
     // treat null as "unknown file changed" and attempt the reload anyway.
     if (filename !== null && filename !== jsonFilename) return;
-    if (ignoringNextChange) {
-      ignoringNextChange = false;
-      return;
-    }
     const reload = async (): Promise<void> => {
       let text: string;
       try {
@@ -186,6 +191,12 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         // File transiently absent (atomic rename in progress) — skip; next event will succeed.
         return;
       }
+      if (text === lastServerWriteContent) {
+        // This event was triggered by the server's own writeFile — skip the echo.
+        lastServerWriteContent = null;
+        return;
+      }
+      lastServerWriteContent = null;
       liveDoc = JSON.parse(text) as FpdfDocument;
       broadcast(JSON.stringify({ type: 'docReload', doc: liveDoc }));
       logger.debug(`Reloaded liveDoc from ${jsonPath}`);

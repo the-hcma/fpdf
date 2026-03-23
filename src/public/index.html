@@ -9,6 +9,7 @@
   <body>
     <div id="toolbar">
       <span id="status">Loading…</span>
+      <button id="copy-path" type="button" title="Copy full path to clipboard">Copy path</button>
       <button id="save" type="button" disabled>Save</button>
       <div id="zoom-controls">
         <button id="zoom-out" type="button" title="Zoom out (Ctrl+scroll)">−</button>
@@ -16,11 +17,16 @@
         <button id="zoom-in" type="button" title="Zoom in (Ctrl+scroll)">+</button>
       </div>
       <button id="toggle-fields" type="button">Show fields</button>
+      <button id="clear-fields" type="button">Clear fields</button>
       <button id="export-pdf" type="button">Export PDF</button>
     </div>
     <div id="error-banner" hidden>
       <span id="error-message"></span>
       <button id="error-dismiss" type="button" aria-label="Dismiss error">✕</button>
+    </div>
+    <div id="warn-banner" hidden>
+      <span id="warn-message"></span>
+      <button id="warn-dismiss" type="button" aria-label="Dismiss warning">✕</button>
     </div>
     <div id="pages"></div>
     <script type="module" src="app.js"></script>

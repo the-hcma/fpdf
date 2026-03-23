@@ -6,6 +6,37 @@
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
+// Messages from third-party libraries we intentionally suppress.
+const SUPPRESSED_WARN_PATTERNS = [/Removing XFA form data as pdf-lib does not support/];
+
+/**
+ * Install a console.warn filter that drops known noisy third-party messages.
+ * Call once at startup. Safe to call multiple times (idempotent).
+ */
+let warnFilterInstalled = false;
+export function installWarnFilter(): void {
+  if (warnFilterInstalled) return;
+  warnFilterInstalled = true;
+  // eslint-disable-next-line no-console
+  const orig = console.warn.bind(console);
+  // eslint-disable-next-line no-console
+  console.warn = (...args: unknown[]) => {
+    const msg = args.length > 0 ? String(args[0]) : '';
+    if (SUPPRESSED_WARN_PATTERNS.some((re) => re.test(msg))) return;
+    orig(...args);
+  };
+}
+
+/**
+ * Ensure the warn filter is active, then run `fn`, returning its result.
+ * Convenience wrapper so call-sites don't need to call installWarnFilter()
+ * separately before every PDFDocument.load().
+ */
+export async function withSilencedWarn<T>(fn: () => Promise<T>): Promise<T> {
+  installWarnFilter();
+  return fn();
+}
+
 export interface Logger {
   debug: (msg: string, ...args: unknown[]) => void;
   info: (msg: string, ...args: unknown[]) => void;

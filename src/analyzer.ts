@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { deflateSync } from 'node:zlib';
 import {
   PDFDocument,
   PDFButton,
@@ -12,6 +13,13 @@ import {
   PDFTextField,
   PDFName,
   PDFString,
+  PDFHexString,
+  PDFDict,
+  PDFArray,
+  PDFNumber,
+  PDFRef,
+  PDFRawStream,
+  decodePDFRawStream,
   type PDFField,
 } from 'pdf-lib';
 import { getDocument, GlobalWorkerOptions, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
@@ -220,6 +228,341 @@ async function extractTextBlocks(
   });
 }
 
+// ── Orphan widget fallback ────────────────────────────────────────────────────
+
+/**
+ * Walk the /Parent chain and return the first value found for `key`.
+ * Handles both direct dict values and indirect (PDFRef) parents.
+ */
+/** Lookup a parent ref from a PDFDict, resolving indirect refs. Returns the parent PDFDict or undefined. */
+function lookupParent(dict: PDFDict, pdfDoc: PDFDocument): PDFDict | undefined {
+  const raw: unknown = dict.get(PDFName.of('Parent'));
+  if (!raw) return undefined;
+  const resolved: unknown = raw instanceof PDFRef ? pdfDoc.context.lookup(raw) : raw;
+  return resolved instanceof PDFDict ? resolved : undefined;
+}
+
+function resolveInherited(dict: PDFDict, key: string, pdfDoc: PDFDocument): unknown {
+  let current: PDFDict | undefined = dict;
+  while (current) {
+    const val = current.get(PDFName.of(key));
+    if (val !== undefined) return val;
+    current = lookupParent(current, pdfDoc);
+  }
+  return undefined;
+}
+
+/**
+ * Build the full dotted field name by collecting /T values up the /Parent chain
+ * (e.g. "form1.page1.lastName") then joining with ".".
+ */
+function buildFullFieldName(dict: PDFDict, pdfDoc: PDFDocument): string {
+  const parts: string[] = [];
+  let current: PDFDict | undefined = dict;
+  while (current) {
+    const t = current.get(PDFName.of('T'));
+    if (t instanceof PDFString || t instanceof PDFHexString) {
+      parts.unshift(t.decodeText());
+    } else if (t instanceof PDFName) {
+      // PDFName.asString() includes the leading '/' — strip it for field names
+      parts.unshift(t.asString().replace(/^\//, ''));
+    }
+    current = lookupParent(current, pdfDoc);
+  }
+  return parts.join('.');
+}
+
+/**
+ * Walk a page's /Annots array and extract Widget annotations that pdf-lib's
+ * form.getFields() missed — typically because the PDF's /AcroForm field tree is
+ * broken or widgets are unlinked from the root fields array.
+ *
+ * Returns PdfField entries for any widgets whose full field name is absent from
+ * `knownNames`. Read-only widgets and non-form widgets (Sig, pushbutton) are skipped.
+ */
+export function extractOrphanWidgets(
+  pdfDoc: PDFDocument,
+  pageNum: number, // 1-based
+  knownNames: Set<string>,
+): PdfField[] {
+  const page = pdfDoc.getPage(pageNum - 1);
+
+  const annotsRaw = page.node.get(PDFName.of('Annots'));
+  if (!annotsRaw) return [];
+  const annotsList = annotsRaw instanceof PDFRef ? pdfDoc.context.lookup(annotsRaw) : annotsRaw;
+  if (!(annotsList instanceof PDFArray)) return [];
+
+  const fields: PdfField[] = [];
+
+  for (let i = 0; i < annotsList.size(); i++) {
+    try {
+      const annotEntry = annotsList.get(i);
+      const annotDict =
+        annotEntry instanceof PDFRef ? pdfDoc.context.lookup(annotEntry) : annotEntry;
+      if (!(annotDict instanceof PDFDict)) continue;
+
+      // Must be a Widget annotation
+      const subtype = annotDict.get(PDFName.of('Subtype'));
+      if (!(subtype instanceof PDFName) || subtype.asString() !== '/Widget') continue;
+
+      // /FT (field type) — may be inherited from /Parent
+      const ftRaw = resolveInherited(annotDict, 'FT', pdfDoc);
+      if (!(ftRaw instanceof PDFName)) continue;
+      const ftStr = ftRaw.asString(); // '/Tx', '/Btn', '/Ch', '/Sig'
+
+      // /Ff (field flags) — may be inherited
+      const ffRaw = resolveInherited(annotDict, 'Ff', pdfDoc);
+      const ff = ffRaw instanceof PDFNumber ? ffRaw.asNumber() : 0;
+
+      // Map /FT + /Ff to FieldType (returns null for pushbutton / signature)
+      let type: FieldType | null = null;
+      if (ftStr === '/Tx') {
+        type = (ff & (1 << 12)) !== 0 ? 'textarea' : 'text'; // bit 12 = Multiline
+      } else if (ftStr === '/Ch') {
+        type = 'select';
+      } else if (ftStr === '/Btn') {
+        if ((ff & (1 << 16)) !== 0) continue; // bit 16 = Pushbutton — skip
+        type = (ff & (1 << 15)) !== 0 ? 'radio' : 'checkbox'; // bit 15 = Radio
+      } else {
+        continue; // Sig or unknown — skip
+      }
+
+      // Skip read-only (bit 0 of Ff)
+      if ((ff & 1) !== 0) continue;
+
+      // /T — needed to build the full field name
+      const tRaw = resolveInherited(annotDict, 'T', pdfDoc);
+      if (!tRaw) continue;
+      const fullName = buildFullFieldName(annotDict, pdfDoc);
+      if (!fullName) continue;
+      if (knownNames.has(fullName)) continue;
+
+      // /Rect [x1 y1 x2 y2]
+      const rectRaw = annotDict.get(PDFName.of('Rect'));
+      const rectResolved = rectRaw instanceof PDFRef ? pdfDoc.context.lookup(rectRaw) : rectRaw;
+      if (!(rectResolved instanceof PDFArray) || rectResolved.size() < 4) continue;
+      const rn = (idx: number): number => {
+        const v = rectResolved.get(idx);
+        return v instanceof PDFNumber ? v.asNumber() : 0;
+      };
+      const rx1 = rn(0);
+      const ry1 = rn(1);
+      const rx2 = rn(2);
+      const ry2 = rn(3);
+      const x = Math.min(rx1, rx2);
+      const y = Math.min(ry1, ry2);
+      const w = Math.abs(rx2 - rx1);
+      const h = Math.abs(ry2 - ry1);
+      if (w <= 0 || h <= 0) continue;
+
+      // /V — current value (best-effort)
+      const vRaw = resolveInherited(annotDict, 'V', pdfDoc);
+      let value: string | boolean = type === 'checkbox' || type === 'radio' ? false : '';
+      if (type === 'checkbox' || type === 'radio') {
+        if (vRaw instanceof PDFName) value = vRaw.asString() !== '/Off';
+      } else {
+        if (vRaw instanceof PDFString || vRaw instanceof PDFHexString) value = vRaw.decodeText();
+      }
+
+      // /TU — tooltip
+      const tuRaw = resolveInherited(annotDict, 'TU', pdfDoc);
+      const tooltip =
+        tuRaw instanceof PDFString || tuRaw instanceof PDFHexString
+          ? tuRaw.decodeText().trim()
+          : undefined;
+
+      // /Opt — options for /Ch (select) fields
+      const options: string[] = [];
+      if (type === 'select') {
+        const optRaw = resolveInherited(annotDict, 'Opt', pdfDoc);
+        if (optRaw instanceof PDFArray) {
+          for (let j = 0; j < optRaw.size(); j++) {
+            const opt = optRaw.get(j);
+            if (opt instanceof PDFString) options.push(opt.decodeText());
+            else if (opt instanceof PDFName) options.push(opt.asString());
+            else if (opt instanceof PDFArray && opt.size() >= 2) {
+              const display = opt.get(1);
+              if (display instanceof PDFString || display instanceof PDFHexString)
+                options.push(display.decodeText());
+            }
+          }
+        }
+      }
+
+      const required = (ff & 2) !== 0;
+      const label = deriveLabel(fullName);
+      fields.push({
+        id: randomUUID(),
+        name: fullName,
+        type,
+        label,
+        displayName: deriveDisplayName(label),
+        ...(tooltip ? { tooltip } : {}),
+        placement: { x, y, width: w, height: h },
+        value,
+        required,
+        readOnly: false,
+        options,
+      });
+    } catch {
+      // best-effort — skip malformed annotations
+    }
+  }
+
+  return fields;
+}
+
+// ── XFA utilities ────────────────────────────────────────────────────────────
+
+/**
+ * Extract the leaf field name from a dotted XFA field path.
+ * "topmostSubform[0].Page1[0].firstName[0]" → "firstName"
+ * "firstName" → "firstName"
+ */
+export function xfaLeafName(fieldName: string): string {
+  const last = fieldName.split('.').pop() ?? fieldName;
+  return last.replace(/\[\d+\]$/, '');
+}
+
+/**
+ * Locate the XFA /datasets packet in a PDF's /AcroForm/XFA array.
+ * Returns the PDFRef to the compressed stream and its decoded XML text,
+ * or null when the PDF has no XFA.
+ */
+export function getXfaDatasetsInfo(pdfDoc: PDFDocument): { ref: PDFRef; xml: string } | null {
+  const acroFormEntry = pdfDoc.catalog.get(PDFName.of('AcroForm'));
+  const acroForm =
+    acroFormEntry instanceof PDFRef ? pdfDoc.context.lookup(acroFormEntry) : acroFormEntry;
+  if (!(acroForm instanceof PDFDict)) return null;
+
+  const xfaEntry = acroForm.get(PDFName.of('XFA'));
+  const xfaArr = xfaEntry instanceof PDFRef ? pdfDoc.context.lookup(xfaEntry) : xfaEntry;
+  if (!(xfaArr instanceof PDFArray)) return null;
+
+  for (let i = 0; i + 1 < xfaArr.size(); i += 2) {
+    const nameEntry = xfaArr.get(i);
+    const packetName =
+      nameEntry instanceof PDFString || nameEntry instanceof PDFHexString
+        ? nameEntry.decodeText()
+        : null;
+    if (packetName !== 'datasets') continue;
+
+    const streamEntry = xfaArr.get(i + 1);
+    const ref = streamEntry instanceof PDFRef ? streamEntry : null;
+    if (!ref) continue;
+
+    const stream = pdfDoc.context.lookup(ref);
+    if (!(stream instanceof PDFRawStream)) continue;
+
+    const decoded = decodePDFRawStream(stream).decode();
+    const xml = Buffer.from(decoded).toString('utf-8');
+    return { ref, xml };
+  }
+  return null;
+}
+
+/**
+ * Parse the flat XFA datasets XML and return a map of element name → value.
+ * Only elements with non-empty text content are included.
+ */
+export function parseXfaDatasetValues(xml: string): Map<string, string> {
+  const values = new Map<string, string>();
+  // Match <ElementName [attrs]>text content</ElementName>
+  const re = /<([A-Za-z_][\w.-]*)(?:\s[^>]*)?>([^<]+)<\/[A-Za-z_][\w.-]*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml)) !== null) {
+    const [, name, rawText] = m;
+    if (!name || rawText === undefined) continue;
+    const text = rawText.trim();
+    if (text !== '') values.set(name, unescapeXmlEntities(text));
+  }
+  return values;
+}
+
+function unescapeXmlEntities(str: string): string {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'");
+}
+
+function escapeXmlEntities(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+/**
+ * Patch the XFA datasets XML, replacing element text for each entry in `values`.
+ * Handles both self-closing elements (`<Name/>`) and elements with existing content.
+ * Field names are mapped to leaf names via `xfaLeafName`.
+ *
+ * Fallback insertion: if neither pattern matches (element absent from the initial
+ * datasets XML — common for radio/checkbox fields that were never set), insert the
+ * element as a child of its parent element.  This is determined by the dotted-path
+ * field name: the second-to-last component names the parent container.
+ */
+export function patchXfaDatasetsXml(xml: string, values: Map<string, string | boolean>): string {
+  let result = xml;
+  for (const [fullName, value] of values) {
+    const leaf = xfaLeafName(fullName);
+    if (!leaf) continue;
+    const strValue = typeof value === 'boolean' ? (value ? '1' : '0') : escapeXmlEntities(value);
+    // Escape leaf name for safe use in RegExp
+    const re = leaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    const before = result;
+    // Replace self-closing: <Name/> or <Name attrs/>
+    result = result.replace(
+      new RegExp(`<${re}(\\s[^>]*)?\\/\\s*>`, 'g'),
+      () => `<${leaf}>${strValue}</${leaf}>`,
+    );
+    // Replace element with existing content: <Name [attrs]>old</Name>
+    result = result.replace(
+      new RegExp(`<${re}(\\s[^>]*)?>([^<]*)<\\/${re}>`, 'g'),
+      () => `<${leaf}>${strValue}</${leaf}>`,
+    );
+
+    // Insertion fallback: element absent from XML and value is non-empty/non-false.
+    // Walk up the ancestor chain (skipping structural elements like #subform) until
+    // we find a closing tag that actually exists in the current XML, then insert there.
+    // This handles flat datasets XML where all data lives under <topmostSubform> rather
+    // than mirroring the deep Page1 / #subform nesting of the XFA template.
+    const shouldInsert = result === before && (typeof value === 'string' ? value !== '' : value);
+    if (shouldInsert) {
+      const parts = fullName.split('.');
+      for (let depth = parts.length - 1; depth >= 1; depth--) {
+        const parentLeaf = xfaLeafName(parts.slice(0, depth).join('.'));
+        if (!parentLeaf || parentLeaf.startsWith('#')) continue;
+        const parentRe = parentLeaf.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const closeTag = new RegExp(`</${parentRe}>`);
+        if (!closeTag.test(result)) continue;
+        result = result.replace(closeTag, `<${leaf}>${strValue}</${leaf}></${parentLeaf}>`);
+        break;
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Re-compress the updated datasets XML string and write it back into the
+ * PDFRawStream in place, updating the /Length dictionary entry to match.
+ */
+export function writeXfaDatasetsStream(pdfDoc: PDFDocument, ref: PDFRef, newXml: string): void {
+  const stream = pdfDoc.context.lookup(ref);
+  if (!(stream instanceof PDFRawStream)) return;
+  const newBytes = deflateSync(Buffer.from(newXml, 'utf-8'));
+  // PDFRawStream.contents is TypeScript-readonly but mutable at runtime
+  (stream as unknown as { contents: Uint8Array }).contents = newBytes;
+  stream.dict.set(PDFName.of('Length'), PDFNumber.of(newBytes.length));
+}
+
 // ── Candidate field detection constants ──────────────────────────────────────
 
 const MIN_FIELD_WIDTH = 30; // pt — narrower paths are noise
@@ -227,6 +570,7 @@ const MAX_FIELD_HEIGHT = 60; // pt — taller non-wide shapes are structural
 const CHECKBOX_MAX_DIM = 15; // pt — near-square boxes this size are checkboxes
 const TEXTAREA_MIN_H = 30; // pt — tall boxes are textareas
 const NOISE_WIDTH_RATIO = 0.85; // fraction of page width → structural rule
+const MIN_VISIBLE_HEIGHT = 4; // pt — below this the path is a line, not a visible rectangle
 
 /**
  * Classify a PDF page based on its operator list and AcroForm field count.
@@ -379,6 +723,9 @@ function evaluateBox(
   } else {
     confidence = 'low';
   }
+  // Paths where either dimension is below MIN_VISIBLE_HEIGHT are lines (horizontal or
+  // vertical), not visible rectangular boxes. They cannot be medium or high regardless of label.
+  if (h < MIN_VISIBLE_HEIGHT || w < MIN_VISIBLE_HEIGHT) confidence = 'low';
 
   candidates.push({
     id: randomUUID(),
@@ -526,6 +873,13 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     pageRefToNum.set(pageRef.objectNumber, i + 1);
   }
 
+  // Check for XFA BEFORE calling getForm() — pdf-lib's getForm() deletes /AcroForm/XFA.
+  // For XFA PDFs: include read-only AcroForm widgets (they're locked for non-XFA editors
+  // but ARE user-editable via XFA), and source values from the datasets XML instead of /V.
+  const xfaDatasetsInfo = getXfaDatasetsInfo(pdfDoc);
+  const xfaValues = xfaDatasetsInfo ? parseXfaDatasetValues(xfaDatasetsInfo.xml) : null;
+  const isXfaPdf = xfaValues !== null;
+
   // Group fields by page.
   const pageFields = new Map<number, PdfField[]>();
   for (let p = 1; p <= pageCount; p++) {
@@ -533,13 +887,22 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
   }
 
   const form = pdfDoc.getForm();
-  const rawFields = form.getFields();
+  let rawFields: PDFField[];
+  try {
+    rawFields = form.getFields();
+  } catch {
+    rawFields = []; // malformed /AcroForm — fall through to orphan walk
+  }
 
   for (const field of rawFields) {
     const type = fieldTypeFor(field);
     if (type === null) continue; // skip button/signature widgets
-    if (field.isReadOnly()) continue; // skip display-only fields
-    const value = fieldValue(field);
+    // For XFA PDFs, include read-only fields (they're editable via XFA, just locked for
+    // non-XFA editors).  For non-XFA PDFs, skip display-only fields as before.
+    if (!isXfaPdf && field.isReadOnly()) continue;
+    const value = isXfaPdf
+      ? (xfaValues.get(xfaLeafName(field.getName())) ?? fieldValue(field))
+      : fieldValue(field);
     const options = fieldOptions(field);
     const widgets = field.acroField.getWidgets();
 
@@ -559,6 +922,13 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
       const label = deriveLabel(field.getName());
       const tuEntry = field.acroField.dict.lookupMaybe(PDFName.of('TU'), PDFString);
       const tooltip = tuEntry ? tuEntry.decodeText().trim() : undefined;
+
+      // For radio widgets, record the specific option (on-value) this widget
+      // represents so the UI can render each button correctly and store the
+      // selected option string instead of a boolean.
+      const radioValue =
+        type === 'radio' ? (widget.getOnValue()?.decodeText() ?? undefined) : undefined;
+
       const pdfField: PdfField = {
         id: randomUUID(),
         name: field.getName(),
@@ -569,12 +939,27 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
         placement,
         value,
         required: field.isRequired(),
-        readOnly: field.isReadOnly(),
+        // XFA marks AcroForm widgets as ReadOnly to block non-XFA editors;
+        // surface them as editable since the exporter will write via XFA datasets.
+        readOnly: isXfaPdf ? false : field.isReadOnly(),
         options,
+        ...(radioValue !== undefined ? { radioValue } : {}),
       };
 
       const bucket = pageFields.get(pageNum) ?? pageFields.get(1);
       if (bucket) bucket.push(pdfField);
+    }
+  }
+
+  // Orphan widget fallback: walk each page's raw /Annots array to pick up Widget
+  // annotations not reachable via form.getFields() (broken /AcroForm field tree).
+  const knownNames = new Set(rawFields.map((f) => f.getName()));
+  for (let p = 1; p <= pageCount; p++) {
+    const orphans = extractOrphanWidgets(pdfDoc, p, knownNames);
+    if (orphans.length > 0) {
+      const bucket = pageFields.get(p) ?? [];
+      bucket.push(...orphans);
+      pageFields.set(p, bucket);
     }
   }
 

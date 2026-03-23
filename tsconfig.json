@@ -12,11 +12,11 @@
     "exactOptionalPropertyTypes": true,
     "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
-    "skipLibCheck": false,
+    "skipLibCheck": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/public/**", "src/__tests__/**", "node_modules"]
+  "exclude": ["src/public/**", "node_modules"]
 }

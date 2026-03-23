@@ -185,7 +185,7 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 
 | # | Branch name | Milestone | Status |
 |---|---|---|---|
-| 1 | `feat/scaffold` | Project scaffold: TypeScript, `esbuild`, `commander`, basic CLI wiring | — |
+| 1 | `feat/scaffold` | Project scaffold: TypeScript, `esbuild`, `commander`, basic CLI wiring | ✅ |
 | 2 | `feat/analyzer` | `analyzer.ts`: AcroForm extraction with `pdf-lib`, produces `.fpdf.json` | — |
 | 3 | `feat/server` | `server.ts`: Express serves PDF + JSON + static files + WebSocket endpoint | — |
 | 4 | `feat/ui-render` | `app.ts` (browser): PDF.js canvas render + computed field overlay | — |

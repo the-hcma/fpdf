@@ -108,6 +108,23 @@ body {
   pointer-events: none;
 }
 
+.field-wrapper {
+  position: absolute;
+}
+
+.required-marker {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 6px 6px 0;
+  border-color: transparent #cc0000 transparent transparent;
+  pointer-events: none;
+  z-index: 1;
+}
+
 .overlay input,
 .overlay select,
 .overlay textarea {
@@ -149,9 +166,53 @@ body {
   border-radius: 2px;
 }
 
+/* ── Error banner ── */
+
+#error-banner {
+  position: sticky;
+  top: 40px;
+  z-index: 9;
+  background: #fde8e8;
+  border-bottom: 1px solid #e57373;
+  color: #b71c1c;
+  font-size: 13px;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#error-banner[hidden] {
+  display: none;
+}
+
+#error-message {
+  flex: 1;
+}
+
+#error-dismiss {
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border: 1px solid #e57373;
+  border-radius: 4px;
+  background: transparent;
+  color: #b71c1c;
+  cursor: pointer;
+}
+
+#error-dismiss:hover {
+  background: #fca5a5;
+}
+
 /* ── Print ── */
 
 @media print {
+  @page {
+    size: auto;
+    margin: 0;
+  }
+
   body {
     background: white;
   }
@@ -160,14 +221,27 @@ body {
     display: none;
   }
 
+  #error-banner {
+    display: none;
+  }
+
   #pages {
     padding: 0;
     gap: 0;
+    transform: none !important;
   }
 
   .page-wrapper {
     box-shadow: none;
+    width: var(--print-width) !important;
+    height: var(--print-height) !important;
+    break-after: page;
     page-break-after: always;
+  }
+
+  .page-wrapper canvas {
+    width: 100% !important;
+    height: 100% !important;
   }
 
   .overlay input,

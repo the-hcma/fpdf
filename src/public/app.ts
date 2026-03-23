@@ -10,6 +10,21 @@ function setStatus(msg: string): void {
   if (el) el.textContent = msg;
 }
 
+function showError(msg: string): void {
+  const banner = document.getElementById('error-banner');
+  const msgEl = document.getElementById('error-message');
+  if (banner && msgEl) {
+    msgEl.textContent = msg;
+    banner.removeAttribute('hidden');
+  } else {
+    setStatus(`Error: ${msg}`);
+  }
+}
+
+function dismissError(): void {
+  document.getElementById('error-banner')?.setAttribute('hidden', '');
+}
+
 function setSaveButtonDirty(dirty: boolean): void {
   const btn = document.getElementById('save') as HTMLButtonElement | null;
   if (btn) btn.disabled = !dirty;
@@ -71,6 +86,8 @@ function initWebSocket(
 
 // ── Field rendering ───────────────────────────────────────────────────────────
 
+const FONT_RATIO = 0.72;
+
 function positionElement(el: HTMLElement, field: PdfField, page: PdfPage, scale: number): void {
   const { x, y, width, height } = field.placement;
   el.style.left = `${String(x * scale)}px`;
@@ -129,8 +146,33 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
   el.title = field.tooltip ?? field.displayName;
   el.dataset.fieldId = field.id;
   if (field.readOnly) (el as HTMLInputElement).disabled = true;
-  positionElement(el, field, page, scale);
-  return el;
+  if (field.required) el.setAttribute('aria-required', 'true');
+
+  // Scale font size for text-like fields so text visually fits the PDF bounding box.
+  if (field.type === 'text' || field.type === 'textarea') {
+    const renderedHeight = field.placement.height * scale;
+    el.style.fontSize = `${String(Math.round(renderedHeight * FONT_RATIO))}px`;
+  }
+
+  el.style.width = '100%';
+  el.style.height = '100%';
+
+  // Wrap in a positioned div so the required marker can be absolutely placed
+  // alongside the input (inputs don't support ::before/::after cross-browser).
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-wrapper';
+  positionElement(wrapper, field, page, scale);
+
+  if (field.required) {
+    wrapper.dataset.required = 'true';
+    const marker = document.createElement('span');
+    marker.className = 'required-marker';
+    marker.setAttribute('aria-hidden', 'true');
+    wrapper.appendChild(marker);
+  }
+
+  wrapper.appendChild(el);
+  return wrapper;
 }
 
 // ── Page rendering ────────────────────────────────────────────────────────────
@@ -164,6 +206,8 @@ async function renderPage(
 
   const wrapper = document.createElement('div');
   wrapper.className = 'page-wrapper';
+  wrapper.style.setProperty('--print-width', `${String(docPage.widthPt / 72)}in`);
+  wrapper.style.setProperty('--print-height', `${String(docPage.heightPt / 72)}in`);
   wrapper.appendChild(canvas);
   wrapper.appendChild(overlay);
   container.appendChild(wrapper);
@@ -271,6 +315,7 @@ function updateToggleLabel(): void {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  document.getElementById('error-dismiss')?.addEventListener('click', dismissError);
   initToggle();
   initZoom();
   setStatus('Loading…');
@@ -357,5 +402,5 @@ async function main(): Promise<void> {
 
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
-  setStatus(`Error: ${msg}`);
+  showError(msg);
 });

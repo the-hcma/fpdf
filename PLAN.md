@@ -190,11 +190,15 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 
 | # | Branch name | Milestone | Status |
 |---|---|---|---|
-| 1 | `feat/scaffold` | Project scaffold: TypeScript, `esbuild`, `commander`, basic CLI wiring | ✅ |
-| 2 | `feat/analyzer` | `analyzer.ts`: AcroForm extraction with `pdf-lib`, produces `.fpdf.json` | — |
-| 3 | `feat/server` | `server.ts`: Express serves PDF + JSON + static files + WebSocket endpoint | — |
-| 4 | `feat/ui-render` | `app.ts` (browser): PDF.js canvas render + computed field overlay | — |
-| 5 | `feat/ws-save` | WebSocket save loop: field edits → debounced JSON write → ack to UI | — |
-| 6 | `feat/json-resume` | JSON resume: detect existing `.fpdf.json`, restore previous field values | — |
-| 7 | `feat/polish` | Polish: transparent input styling, accurate field sizing, status bar, error handling | — |
-| 8 | `feat/export` | `fpdf export`: write filled values back into AcroForm PDF (`pdf-lib`) | — |
+| 1 | `03-22-feat_project_scaffold` | Project scaffold: TypeScript, `esbuild`, `commander`, basic CLI wiring | ✅ |
+| 2 | `03-22-feat_analyzer_acroform_extraction_with_pdf-lib` | `analyzer.ts`: AcroForm extraction with `pdf-lib`, produces `.fpdf.json` | ✅ |
+| 3 | `03-22-feat_server_express_websocket_serving_pdf_json_and_static_assets` | `server.ts`: Express serves PDF + JSON + static files + WebSocket endpoint | ✅ |
+| 4 | `03-22-feat_ui_render_pdf.js_canvas_field_overlay` | `app.ts` (browser): PDF.js canvas render + computed field overlay | ✅ |
+| 5 | `03-22-feat_websocket_save_loop` | WebSocket save loop: field edits → debounced JSON write → ack to UI | ✅ |
+| 5a | `03-22-feat_zoom_ctrl_wheel_with_tooltip_hover_hints` | Zoom (Ctrl+scroll + toolbar buttons), AcroForm `/TU` tooltip on hover | ✅ |
+| 5b | `03-22-feat_watch_json_file_for_external_changes_and_reload_livedoc` | Watch `.fpdf.json` for external edits; broadcast `docReload` to UI | ✅ |
+| 6 | `03-22-feat_auto-resume_from_existing_.fpdf.json_milestone_6_` | JSON resume: auto-detect existing `.fpdf.json`, restore previous field values | ✅ |
+| 6a | `03-22-feat_add_acroform_tooltip__tu_to_pdffield_json` | Add AcroForm `/TU` tooltip field to `.fpdf.json` schema and analyzer | ✅ |
+| 7 | `03-22-feat_polish_font_scaling_required_markers_print_sizing_error_banner_m7_` | Polish: font size scaling, required-field markers, print page sizing, error banner | ✅ |
+| 7a | `03-22-feat_dynamic_font_scaling_to_prevent_overflow_in_text_fields` | Dynamic font shrink on input so text always fits the field without scrolling | ✅ |
+| 8 | `03-22-feat_export_filled_pdf_via_browser_button_and_cli_milestone_8_` | `fpdf export`: write filled values back into AcroForm PDF; browser Export PDF button | ✅ |

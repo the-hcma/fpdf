@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import {
@@ -13,6 +14,7 @@ import {
   PDFString,
   type PDFField,
 } from 'pdf-lib';
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import type {
   FpdfDocument,
   FpdfMetadata,
@@ -20,7 +22,14 @@ import type {
   PdfPage,
   Placement,
   FieldType,
+  TextBlock,
 } from './types.js';
+import { logger } from './logger.js';
+
+// pdfjs-dist requires a Worker even in Node.js. Resolve the sibling worker
+// bundle relative to this module so it works regardless of cwd.
+const _require = createRequire(import.meta.url);
+GlobalWorkerOptions.workerSrc = `file://${_require.resolve('pdfjs-dist/legacy/build/pdf.worker.mjs')}`;
 
 /** Thrown when the PDF cannot be read, parsed, or has no usable form fields. */
 export class AnalyzerError extends Error {
@@ -127,6 +136,87 @@ function fieldOptions(field: PDFField): string[] {
   return [];
 }
 
+// TextItem has a `str` property; TextMarkedContent does not.
+function isPdfjsTextItem(
+  item: unknown,
+): item is { str: string; transform: number[]; width: number; height: number; fontName: string } {
+  return typeof (item as { str?: unknown }).str === 'string';
+}
+
+/**
+ * Extract static text blocks from a single PDF page using pdfjs-dist.
+ *
+ * Adjacent items on the same logical line (same fontName, fontSize within
+ * 0.5pt, y-position within half the font size) are joined into one TextBlock.
+ * Returns blocks sorted top-to-bottom.
+ */
+async function extractTextBlocks(
+  pdfjsPage: Awaited<ReturnType<Awaited<ReturnType<typeof getDocument>['promise']>['getPage']>>,
+): Promise<TextBlock[]> {
+  const content = await pdfjsPage.getTextContent();
+
+  const items = (content.items as unknown[])
+    .filter(isPdfjsTextItem)
+    .filter((it) => it.str.trim().length > 0 && it.height > 0)
+    .map((it) => ({
+      str: it.str,
+      x: it.transform[4] ?? 0,
+      y: it.transform[5] ?? 0,
+      width: it.width,
+      height: it.height,
+      fontName: it.fontName,
+    }));
+
+  // Sort top-to-bottom (y descending), then left-to-right.
+  items.sort((a, b) => b.y - a.y || a.x - b.x);
+
+  // Group into logical lines.
+  const groups: (typeof items)[] = [];
+  for (const item of items) {
+    let placed = false;
+    for (const group of groups) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const rep = group[0]!; // groups only contain non-empty arrays
+      if (
+        Math.abs(rep.y - item.y) < rep.height / 2 &&
+        Math.abs(rep.height - item.height) <= 0.5 &&
+        rep.fontName === item.fontName
+      ) {
+        group.push(item);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) groups.push([item]);
+  }
+
+  return groups.map((group) => {
+    group.sort((a, b) => a.x - b.x);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const rep = group[0]!; // groups only contain non-empty arrays
+
+    let text = rep.str;
+    let prev = rep;
+    for (const curr of group.slice(1)) {
+      if (curr.x - (prev.x + prev.width) > 0.25 * rep.height) text += ' ';
+      text += curr.str;
+      prev = curr;
+    }
+
+    const minX = group.reduce((m, it) => Math.min(m, it.x), Infinity);
+    const maxX = group.reduce((m, it) => Math.max(m, it.x + it.width), -Infinity);
+    const minY = group.reduce((m, it) => Math.min(m, it.y), Infinity);
+    const maxH = group.reduce((m, it) => Math.max(m, it.height), 0);
+
+    return {
+      text,
+      placement: { x: minX, y: minY, width: maxX - minX, height: maxH },
+      fontSize: rep.height,
+      fontName: rep.fontName,
+    };
+  });
+}
+
 /**
  * Analyze a PDF file and extract all AcroForm fields into an FpdfDocument.
  *
@@ -153,6 +243,19 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     throw new AnalyzerError(
       `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+
+  // Load with pdfjs-dist for text extraction (best-effort; errors leave textBlocks empty).
+  let pdfjsDoc: Awaited<ReturnType<typeof getDocument>['promise']> | null = null;
+  try {
+    pdfjsDoc = await getDocument({
+      data: new Uint8Array(bytes), // copy — pdfjs-dist takes ownership of TypedArray inputs
+      useSystemFonts: true,
+      disableFontFace: true,
+      verbosity: 0,
+    }).promise;
+  } catch {
+    logger.warn(`pdfjs-dist failed to load ${path.basename(absPath)}; textBlocks will be empty`);
   }
 
   const now = new Date().toISOString();
@@ -223,11 +326,23 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
   for (let p = 1; p <= pageCount; p++) {
     const page = pdfDoc.getPage(p - 1);
     const { width, height } = page.getSize();
+
+    let textBlocks: TextBlock[] = [];
+    if (pdfjsDoc !== null) {
+      try {
+        const pdfjsPage = await pdfjsDoc.getPage(p); // 1-based
+        textBlocks = await extractTextBlocks(pdfjsPage);
+      } catch {
+        // best-effort — leave textBlocks empty for this page
+      }
+    }
+
     pages.push({
       pageNumber: p,
       widthPt: width,
       heightPt: height,
       fields: pageFields.get(p) ?? [],
+      textBlocks,
     });
   }
 

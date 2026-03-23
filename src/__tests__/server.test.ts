@@ -44,6 +44,7 @@ const MOCK_DOC: FpdfDocument = {
           options: [],
         },
       ],
+      textBlocks: [],
     },
   ],
 };

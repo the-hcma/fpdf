@@ -54,6 +54,7 @@ function makeDoc(fields: Partial<PdfField>[]): FpdfDocument {
           options: [],
           ...f,
         })),
+        textBlocks: [],
       },
     ],
   };

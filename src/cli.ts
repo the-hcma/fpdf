@@ -29,13 +29,26 @@ export function buildProgram(): Command {
 
         let doc: FpdfDocument;
         if (opts.json) {
+          // Explicit --json: load the specified file; error if it is missing.
           const raw = await readFile(jsonPath, 'utf-8');
           doc = JSON.parse(raw) as FpdfDocument;
           logger.info(`Resumed session from ${jsonPath}`);
         } else {
-          doc = await analyzePdf(pdfPath);
-          await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-          logger.info(`Analyzed ${pdfPath} → ${jsonPath}`);
+          // Auto-detect: load the default .fpdf.json if it exists, otherwise analyze.
+          let raw: string | null = null;
+          try {
+            raw = await readFile(jsonPath, 'utf-8');
+          } catch {
+            // File absent — fall through to fresh analysis.
+          }
+          if (raw !== null) {
+            doc = JSON.parse(raw) as FpdfDocument;
+            logger.info(`Resumed session from ${jsonPath}`);
+          } else {
+            doc = await analyzePdf(pdfPath);
+            await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
+            logger.info(`Analyzed ${pdfPath} → ${jsonPath}`);
+          }
         }
 
         const handle = await startServer({ pdfPath, doc, jsonPath });

@@ -20,7 +20,12 @@ vi.mock('open', () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('node:fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
-  readFile: vi.fn().mockResolvedValue('{}'),
+  // Default: JSON file absent — fill tests that need it to exist override per-test.
+  readFile: vi
+    .fn()
+    .mockRejectedValue(
+      Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }),
+    ),
 }));
 
 /**
@@ -98,6 +103,7 @@ describe('CLI program structure', () => {
     let exitSpy: MockInstance;
 
     beforeEach(() => {
+      vi.clearAllMocks(); // reset call counts on vi.fn() mocks between tests
       infoSpy = vi.spyOn(logger, 'info').mockReturnValue(undefined);
       errorSpy = vi.spyOn(logger, 'error').mockReturnValue(undefined);
       exitSpy = vi
@@ -172,6 +178,41 @@ describe('CLI program structure', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(readFile).toHaveBeenCalledWith(expect.stringContaining('form.fpdf.json'), 'utf-8');
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Resumed session'));
+      expect(startServer).toHaveBeenCalled();
+
+      stdoutSpy.mockRestore();
+    });
+
+    it('auto-resumes from the default .fpdf.json when it exists without --json flag', async () => {
+      const { startServer } = await import('../server.js');
+      const { analyzePdf } = await import('../analyzer.js');
+      const { readFile } = await import('node:fs/promises');
+      const mockDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      };
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc) as never);
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(analyzePdf).not.toHaveBeenCalled();
       expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Resumed session'));
       expect(startServer).toHaveBeenCalled();
 

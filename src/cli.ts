@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-import { writeFile } from 'node:fs/promises';
+import { writeFile, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { Command } from 'commander';
+import open from 'open';
 import { logger } from './logger.js';
 import { analyzePdf, AnalyzerError } from './analyzer.js';
+import { startServer } from './server.js';
+import type { FpdfDocument } from './types.js';
 
 export function buildProgram(): Command {
   const program = new Command();
@@ -15,10 +18,51 @@ export function buildProgram(): Command {
     .description('Analyze a PDF and start a local fill session in the browser')
     .option('--open', 'Automatically open the URL in the default browser', false)
     .option('--json <path>', 'Resume from an existing .fpdf.json session file')
-    .action((...args: unknown[]) => {
-      void args;
-      logger.error('fill command not yet implemented');
-      process.exit(1);
+    .action((file: string, opts: { open: boolean; json?: string }) => {
+      const run = async (): Promise<void> => {
+        const pdfPath = path.resolve(file);
+        const defaultJsonPath = path.join(
+          path.dirname(pdfPath),
+          `${path.basename(pdfPath, path.extname(pdfPath))}.fpdf.json`,
+        );
+        const jsonPath = opts.json ? path.resolve(opts.json) : defaultJsonPath;
+
+        let doc: FpdfDocument;
+        if (opts.json) {
+          const raw = await readFile(jsonPath, 'utf-8');
+          doc = JSON.parse(raw) as FpdfDocument;
+          logger.info(`Resumed session from ${jsonPath}`);
+        } else {
+          doc = await analyzePdf(pdfPath);
+          await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
+          logger.info(`Analyzed ${pdfPath} → ${jsonPath}`);
+        }
+
+        const handle = await startServer({ pdfPath, doc, jsonPath });
+        logger.info(`Listening on ${handle.url}`);
+        process.stdout.write(`${handle.url}\n`);
+
+        if (opts.open) {
+          await open(handle.url);
+        }
+
+        // Keep the process alive until SIGINT / SIGTERM
+        const shutdown = (): void => {
+          handle.close().catch((err: unknown) => {
+            logger.error(
+              `Server shutdown error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+        };
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
+      };
+
+      run().catch((err: unknown) => {
+        const msg = err instanceof AnalyzerError ? err.message : String(err);
+        logger.error(msg);
+        process.exit(1);
+      });
     });
 
   program

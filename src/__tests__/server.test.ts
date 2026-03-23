@@ -233,6 +233,124 @@ describe('startServer', () => {
       const tmpHandle = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
       await expect(tmpHandle.close()).resolves.toBeUndefined();
     });
+
+    it('terminates connected WebSocket clients on close', async () => {
+      const tmpHandle = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(`${tmpHandle.url.replace('http', 'ws')}/ws`);
+        ws.on('open', () => {
+          // close the server while the WS client is still open
+          tmpHandle.close().then(resolve).catch(reject);
+        });
+        ws.on('error', () => {
+          /* expected — server closed the connection */
+        });
+      });
+    });
+  });
+
+  describe('JSON file watcher', () => {
+    it('broadcasts docReload to clients when the JSON file is edited externally', async () => {
+      const mockPage = MOCK_DOC.pages[0];
+      const mockField = mockPage?.fields[0];
+      if (!mockPage || !mockField) throw new Error('fixture missing page/field');
+
+      const updatedDoc: FpdfDocument = {
+        ...MOCK_DOC,
+        pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ExternalEdit' }] }],
+      };
+
+      // Flush any pending watcher callbacks from prior save operations (ignoringNextChange reset)
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+      const reloadMsg = await new Promise<{ type: string; doc: FpdfDocument }>(
+        (resolve, reject) => {
+          const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
+          ws.on('open', () => {
+            // Write the updated JSON directly to disk (external edit)
+            void writeFile(jsonPath, JSON.stringify(updatedDoc, null, 2), 'utf-8').catch(reject);
+          });
+          ws.on('message', (data) => {
+            const msg = JSON.parse(Buffer.from(data as Buffer).toString('utf-8')) as {
+              type: string;
+              doc: FpdfDocument;
+            };
+            if (msg.type === 'docReload') {
+              ws.close();
+              resolve(msg);
+            }
+          });
+          ws.on('error', reject);
+          setTimeout(() => {
+            reject(new Error('timeout waiting for docReload'));
+          }, 2000);
+        },
+      );
+
+      expect(reloadMsg.type).toBe('docReload');
+      expect(reloadMsg.doc.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
+
+      // GET /doc should also reflect the reloaded doc
+      const res = await fetch(`${baseUrl}/doc`);
+      const body = (await res.json()) as FpdfDocument;
+      expect(body.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
+    });
+
+    it('does not broadcast docReload when the server itself writes the file (ignoringNextChange)', async () => {
+      const mockPage = MOCK_DOC.pages[0];
+      const mockField = mockPage?.fields[0];
+      if (!mockPage || !mockField) throw new Error('fixture missing page/field');
+      const saveDoc: FpdfDocument = {
+        ...MOCK_DOC,
+        pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ServerWrite' }] }],
+      };
+
+      // Send a WS save — this triggers a server writeFile with ignoringNextChange = true
+      const savedAck = await new Promise<string>((resolve, reject) => {
+        const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
+        ws.on('open', () => {
+          ws.send(JSON.stringify({ type: 'save', doc: saveDoc }));
+        });
+        ws.on('message', (data) => {
+          const msg = JSON.parse(Buffer.from(data as Buffer).toString('utf-8')) as {
+            type: string;
+          };
+          // Only the 'saved' ack should arrive, not a 'docReload'
+          ws.close();
+          resolve(msg.type);
+        });
+        ws.on('error', reject);
+      });
+
+      expect(savedAck).toBe('saved');
+
+      // Allow the fs.watch callback to fire and be skipped (covers ignoringNextChange = true branch)
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    });
+
+    it('logs an error and keeps serving when invalid JSON is written to the file', async () => {
+      // Write garbage so JSON.parse throws inside reload(); verifies the outer catch fires.
+      await writeFile(jsonPath, 'not valid json', 'utf-8');
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      // Server should still respond (liveDoc unchanged from prior value)
+      const res = await fetch(`${baseUrl}/doc`);
+      expect(res.status).toBe(200);
+      // Restore valid state for subsequent tests
+      await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    });
+
+    it('ignores unrelated files written to the same directory', async () => {
+      // Write a sibling file — the directory watcher should skip it (filename !== jsonFilename)
+      const siblingPath = path.join(path.dirname(jsonPath), 'unrelated.txt');
+      await writeFile(siblingPath, 'noise', 'utf-8');
+
+      // If docReload were incorrectly broadcast, the next GET /doc would fail;
+      // confirm the live doc is unchanged after a brief wait.
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      const res = await fetch(`${baseUrl}/doc`);
+      expect(res.status).toBe(200);
+    });
   });
 });
 

@@ -41,6 +41,7 @@ function makeDoc(fields: Partial<PdfField>[]): FpdfDocument {
         pageNumber: 1,
         widthPt: 612,
         heightPt: 792,
+        pageType: 'acroform' as const,
         fields: fields.map((f) => ({
           id: 'test-id',
           name: 'field',
@@ -54,6 +55,7 @@ function makeDoc(fields: Partial<PdfField>[]): FpdfDocument {
           options: [],
           ...f,
         })),
+        candidateFields: [],
         textBlocks: [],
       },
     ],

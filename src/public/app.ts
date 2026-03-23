@@ -349,6 +349,10 @@ async function main(): Promise<void> {
     setStatus(`${baseText} · Saving…`);
     sendSave(fpdfDoc);
   });
+
+  document.getElementById('export-pdf')?.addEventListener('click', () => {
+    window.open('/filled-pdf', '_blank');
+  });
 }
 
 main().catch((err: unknown) => {

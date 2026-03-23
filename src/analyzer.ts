@@ -9,6 +9,8 @@ import {
   PDFRadioGroup,
   PDFSignature,
   PDFTextField,
+  PDFName,
+  PDFString,
   type PDFField,
 } from 'pdf-lib';
 import type {
@@ -196,12 +198,15 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
       const pageNum = pageRef ? (pageRefToNum.get(pageRef.objectNumber) ?? 1) : 1;
 
       const label = deriveLabel(field.getName());
+      const tuEntry = field.acroField.dict.lookupMaybe(PDFName.of('TU'), PDFString);
+      const tooltip = tuEntry ? tuEntry.decodeText().trim() : undefined;
       const pdfField: PdfField = {
         id: randomUUID(),
         name: field.getName(),
         type,
         label,
         displayName: deriveDisplayName(label),
+        ...(tooltip ? { tooltip } : {}),
         placement,
         value,
         required: field.isRequired(),

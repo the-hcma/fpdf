@@ -37,6 +37,8 @@ After step 3, `fpdf` behaves identically to the globally installed package. To u
 npm install -g fpdf
 ```
 
+To build from source instead, see the [Quickstart](#quickstart-from-source).
+
 ## Usage
 
 ```bash
@@ -85,6 +87,8 @@ Writes filled values back into the original PDF and saves a new file alongside i
 Open the browser's print dialog while filling to print the completed form at 1:1 scale. UI chrome is hidden automatically via CSS `@media print`.
 
 ## Development
+
+See the [Quickstart](#quickstart-from-source) to get a local build running.
 
 ```bash
 npm run build          # compile TypeScript + bundle browser assets

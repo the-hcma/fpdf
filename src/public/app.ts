@@ -3,6 +3,35 @@ import type { FpdfDocument, PdfPage, PdfField } from '../types.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
+// ── Dark mode ─────────────────────────────────────────────────────────────────
+// Default is dark. localStorage key 'fpdf-theme' stores 'light' or 'dark'.
+// Applied immediately (before main()) to avoid a flash of the wrong theme.
+
+(function applyTheme() {
+  const stored = localStorage.getItem('fpdf-theme');
+  const theme = stored === 'light' ? 'light' : 'dark';
+  document.body.dataset.theme = theme;
+})();
+
+function initDarkToggle(): void {
+  const btn = document.getElementById('dark-toggle');
+  if (!btn) return;
+
+  function updateButton(b: HTMLElement): void {
+    const isDark = document.body.dataset.theme === 'dark';
+    b.textContent = isDark ? 'Light mode' : 'Dark mode';
+  }
+
+  updateButton(btn);
+
+  btn.addEventListener('click', () => {
+    const next = document.body.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.body.dataset.theme = next;
+    localStorage.setItem('fpdf-theme', next);
+    updateButton(btn);
+  });
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function humanPdfKind(kind: string): string {
@@ -684,6 +713,7 @@ async function main(): Promise<void> {
   });
 }
 
+initDarkToggle();
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
   showError(msg);

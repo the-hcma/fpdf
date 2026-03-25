@@ -291,6 +291,7 @@ body {
   flex: 1;
 }
 
+#regen-btn,
 #warn-dismiss {
   font-size: 13pt;
   line-height: 1;
@@ -302,8 +303,18 @@ body {
   cursor: pointer;
 }
 
+#regen-btn[hidden] {
+  display: none;
+}
+
+#regen-btn:hover,
 #warn-dismiss:hover {
   background: var(--bg-warn-dismiss-hover);
+}
+
+#regen-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 #error-message {

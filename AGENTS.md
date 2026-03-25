@@ -87,6 +87,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - Each commit must pass `npm run check` (type-check + lint + format check) and `npm test`.
 - Keep commits focused. One logical change per commit.
 - PR descriptions must reference the relevant milestone from [PLAN.md](./PLAN.md).
+- Before starting a new PR or branch, confirm the current PR is either merged or that all CI checks pass (lint, format, tests, coverage). Never start new work on a broken base.
 
 ---
 

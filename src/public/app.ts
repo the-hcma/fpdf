@@ -5,6 +5,38 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function humanPdfKind(kind: string): string {
+  switch (kind) {
+    case 'acroform':
+      return 'AcroForm';
+    case 'xfa-hybrid':
+      return 'XFA + AcroForm';
+    case 'pure-xfa':
+      return 'Pure XFA';
+    case 'no-acroform':
+      return 'No AcroForm';
+    default:
+      return kind;
+  }
+}
+
+function humanPageType(type: string): string {
+  switch (type) {
+    case 'acroform':
+      return 'AcroForm';
+    case 'vector':
+      return 'Vector';
+    case 'raster':
+      return 'Scanned';
+    case 'raster+ocr':
+      return 'Scanned + OCR';
+    case 'hybrid':
+      return 'Hybrid';
+    default:
+      return type;
+  }
+}
+
 function setStatus(msg: string): void {
   const el = document.getElementById('status');
   if (el) el.textContent = msg;
@@ -272,12 +304,17 @@ async function renderPage(
     if (inputEl) fitFontToBox(inputEl);
   }
 
+  const pageLabel = document.createElement('div');
+  pageLabel.className = 'page-type-label';
+  pageLabel.textContent = `Page ${String(docPage.pageNumber)} · ${humanPageType(docPage.pageType)}`;
+
   const wrapper = document.createElement('div');
   wrapper.className = 'page-wrapper';
   wrapper.style.setProperty('--print-width', `${String(docPage.widthPt / 72)}in`);
   wrapper.style.setProperty('--print-height', `${String(docPage.heightPt / 72)}in`);
   wrapper.appendChild(canvas);
   wrapper.appendChild(overlay);
+  container.appendChild(pageLabel);
   container.appendChild(wrapper);
 }
 
@@ -522,7 +559,8 @@ async function main(): Promise<void> {
   initTabOrder(fpdfDoc, pagesContainer);
 
   const pageWord = pdfDoc.numPages === 1 ? 'page' : 'pages';
-  baseText = `${fpdfDoc.metadata.pdfFilename} — ${String(pdfDoc.numPages)} ${pageWord}`;
+  const kindLabel = fpdfDoc.metadata.pdfKind ? ` · ${humanPdfKind(fpdfDoc.metadata.pdfKind)}` : '';
+  baseText = `${fpdfDoc.metadata.pdfFilename} — ${String(pdfDoc.numPages)} ${pageWord}${kindLabel}`;
   setStatus(baseText);
 
   // Show full path as tooltip on the status element.
@@ -574,6 +612,27 @@ async function main(): Promise<void> {
     if (clearBtn) {
       clearBtn.disabled = true;
       clearBtn.title = noFieldsMsg;
+    }
+  }
+
+  // Show a banner when the PDF kind has limited or no support.
+  const pdfKind = fpdfDoc.metadata.pdfKind;
+  if (pdfKind === 'pure-xfa') {
+    showWarning(
+      'This PDF uses pure XFA forms, which are not yet fully supported. ' +
+        'Fields may be missing or export may not work correctly.',
+    );
+  } else if (pdfKind === 'no-acroform') {
+    const pageTypes = new Set(fpdfDoc.pages.map((p) => p.pageType));
+    if (pageTypes.has('raster') || pageTypes.has('raster+ocr')) {
+      showWarning(
+        'This PDF appears to be a scanned document. fpdf cannot detect or fill fields in scanned images.',
+      );
+    } else {
+      // vector or hybrid — candidateFields only, no export
+      showWarning(
+        'This PDF has no AcroForm fields. Detected fields are approximate and values cannot be exported back to PDF.',
+      );
     }
   }
 

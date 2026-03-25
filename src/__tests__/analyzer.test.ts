@@ -361,6 +361,14 @@ describe('deriveDisplayName', () => {
   it('leaves a label with no number unchanged', () => {
     expect(deriveDisplayName('Check Box5')).toBe('Check Box5');
   });
+
+  it('truncates at the first colon', () => {
+    expect(deriveDisplayName('Patient Name:')).toBe('Patient Name');
+  });
+
+  it('truncates at colon preserving text before it', () => {
+    expect(deriveDisplayName('Date of Birth: MMDDCCYY')).toBe('Date of Birth');
+  });
 });
 
 describe('analyzePdf', () => {
@@ -810,9 +818,11 @@ describe('candidateFields extraction', () => {
     expect(Array.isArray(doc.pages[0]?.candidateFields)).toBe(true);
   });
 
-  it('vector line PDF yields at least one candidate field', async () => {
+  it('vector line PDF yields no candidate fields (horizontal underlines are filtered)', async () => {
+    // The fixture draws a plain drawLine() which produces a zero-height stroke path.
+    // MIN_VISIBLE_HEIGHT rejects it entirely — underlines are not fillable fields.
     const doc = await analyzePdf(vectorLinePdfPath);
-    expect((doc.pages[0]?.candidateFields ?? []).length).toBeGreaterThan(0);
+    expect(doc.pages[0]?.candidateFields ?? []).toHaveLength(0);
   });
 
   it('vector rect PDF yields at least one candidate field', async () => {
@@ -850,10 +860,12 @@ describe('candidateFields extraction', () => {
     }
   });
 
-  it('vector line candidate label matches nearby text block', async () => {
-    const doc = await analyzePdf(vectorLinePdfPath);
+  it('vector rect candidate labels use in-box text when label is inside the rectangle', async () => {
+    // The vectorRect fixture draws a rectangle with "Amount" above it (external label).
+    // External label → medium confidence; label string must still be captured.
+    const doc = await analyzePdf(vectorRectPdfPath);
     const candidates = doc.pages[0]?.candidateFields ?? [];
-    const labeled = candidates.find((c) => c.label.includes('Signature'));
+    const labeled = candidates.find((c) => c.label.includes('Amount'));
     expect(labeled).toBeDefined();
   });
 
@@ -894,7 +906,8 @@ describe('detectCandidateFields unit', () => {
       612,
     );
     expect(result.length).toBeGreaterThan(0);
-    expect(result[0]?.placement.width).toBeCloseTo(150, 0);
+    // Width is inset by FIELD_MARGIN (3pt) on each side: 150 - 2*3 = 144.
+    expect(result[0]?.placement.width).toBeCloseTo(144, 0);
   });
 
   it('filters out full-width structural lines', () => {
@@ -918,7 +931,8 @@ describe('detectCandidateFields unit', () => {
     expect(result[0]?.type).toBe('checkbox');
   });
 
-  it('assigns high confidence when label is matched', () => {
+  it('assigns medium confidence when external label is above the field', () => {
+    // Label is above the field (not inside) → external label → medium confidence.
     // OPS.rectangle = 19, OPS.stroke = 20
     const textBlocks = [
       {
@@ -933,13 +947,12 @@ describe('detectCandidateFields unit', () => {
       textBlocks,
       612,
     );
-    expect(result[0]?.confidence).toBe('high');
+    expect(result[0]?.confidence).toBe('medium');
     expect(result[0]?.label).toBe('Full Name');
   });
 
-  it('caps confidence at low for flat horizontal lines (h < MIN_VISIBLE_HEIGHT)', () => {
-    // A horizontal line: width=150, height=0 → bboxToBox normalises h to 1pt
-    // Even with a matching label it must be low confidence (not a visible rectangle).
+  it('rejects flat horizontal lines (h normalised to 1pt < MIN_VISIBLE_HEIGHT)', () => {
+    // height=0 → bboxToBox normalises to 1pt → below MIN_VISIBLE_HEIGHT → filtered out entirely.
     const textBlocks = [
       {
         text: 'Signature',
@@ -954,12 +967,11 @@ describe('detectCandidateFields unit', () => {
       textBlocks,
       612,
     );
-    expect(result.length).toBeGreaterThan(0);
-    expect(result[0]?.confidence).toBe('low');
+    expect(result).toHaveLength(0);
   });
 
-  it('caps confidence at low for vertical lines (w = 0, h tall)', () => {
-    // A vertical table rule: width=0, height=31 — not a visible rectangle.
+  it('rejects vertical lines (w = 0 < MIN_VISIBLE_HEIGHT)', () => {
+    // A vertical table rule: width=0 — filtered out entirely.
     const textBlocks = [
       {
         text: 'PRESCRIPTION INFORMATION',
@@ -974,8 +986,169 @@ describe('detectCandidateFields unit', () => {
       textBlocks,
       612,
     );
-    expect(result.length).toBeGreaterThan(0);
-    expect(result[0]?.confidence).toBe('low');
+    expect(result).toHaveLength(0);
+  });
+
+  it('detects rectangle with in-box label as high-confidence field', () => {
+    // Label is inside the rectangle near the top (high PDF y) → in-box label → high confidence.
+    // Field: x=50, y=670, w=200, h=30. Label at top: y=691, h=8 (near cell top=700).
+    // After margin+label inset: fieldY=673, newTop=691-3=688, fieldH=688-673=15 > MIN_VISIBLE_HEIGHT.
+    const textBlocks = [
+      {
+        text: 'Patient Name',
+        placement: { x: 55, y: 691, width: 60, height: 8 },
+        fontSize: 8,
+        fontName: 'TT1',
+      },
+    ];
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 200, 30], []] },
+      textBlocks,
+      612,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.confidence).toBe('high');
+    expect(result[0]?.label).toBe('Patient Name');
+  });
+
+  it('filters out rectangles whose interior is mostly text (instruction block)', () => {
+    // Three large text blocks fill > 55% of the box area → coverage filter removes it.
+    // Field: x=50, y=600, w=200, h=80 → area=16000.
+    // Each text block: 100×30 = 3000; three of them = 9000; coverage = 9000/16000 = 0.5625 > 0.55.
+    const textBlocks = [
+      {
+        text: 'Please read',
+        placement: { x: 55, y: 648, width: 100, height: 30 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+      {
+        text: 'all instructions',
+        placement: { x: 55, y: 616, width: 100, height: 30 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+      {
+        text: 'carefully',
+        placement: { x: 55, y: 604, width: 100, height: 30 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+    ];
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 600, 200, 80], []] },
+      textBlocks,
+      612,
+    );
+    expect(result).toHaveLength(0);
+  });
+
+  it('falls back to external label when rectangle has no interior text', () => {
+    // Empty rectangle + label directly above it → external label → medium confidence.
+    // Field: x=50, y=670, w=150, h=16. Label center at (80, 695) is above the field.
+    const textBlocks = [
+      {
+        text: 'Date of Birth',
+        placement: { x: 50, y: 690, width: 60, height: 10 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+    ];
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 150, 16], []] },
+      textBlocks,
+      612,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.confidence).toBe('medium');
+    expect(result[0]?.label).toBe('Date of Birth');
+  });
+
+  it('assigns medium confidence to empty rectangle with good geometry and no label', () => {
+    // No text blocks at all — good geometry alone yields medium confidence.
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 120, 18], []] },
+      [],
+      612,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.confidence).toBe('medium');
+    expect(result[0]?.label).toBe('');
+  });
+
+  it('classifies tall wide rectangle as textarea', () => {
+    // h=40 > TEXTAREA_MIN_H(30) and w/h > 2 (not tall-non-wide) → textarea type.
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 600, 200, 40], []] },
+      [],
+      612,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.type).toBe('textarea');
+  });
+
+  it('rejects tall non-wide rectangle (column/structural element)', () => {
+    // h=80 > MAX_FIELD_HEIGHT(60) and w/h < 2 (narrow) → rejected.
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 400, 30, 80], []] },
+      [],
+      612,
+    );
+    expect(result).toHaveLength(0);
+  });
+
+  it('assigns medium confidence when bad geometry but external label exists', () => {
+    // Tall wide box: h=80 > MAX_FIELD_HEIGHT(60), w/h=2.5 ≥ 2 so not rejected, but
+    // goodGeometry requires h ≤ MAX_FIELD_HEIGHT → false → bad geometry.
+    // External label above → labelSource='external' → medium confidence.
+    // fieldTop = y+h = 600+80 = 680; isAbove requires by in [680, 680+2*fontSize=700]
+    const textBlocks = [
+      {
+        text: 'Comments',
+        placement: { x: 50, y: 683, width: 60, height: 10 },
+        fontSize: 10,
+        fontName: 'TT1',
+      },
+    ];
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 600, 200, 80], []] },
+      textBlocks,
+      612,
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.confidence).toBe('medium');
+  });
+
+  it('reserves top strip for tall empty rectangle with no inside text (h >= 20)', () => {
+    // h=25, no text blocks — insets top by 30% so fieldH is reduced.
+    // The field should still be detected (fieldH > MIN_VISIBLE_HEIGHT).
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 120, 25], []] },
+      [],
+      612,
+    );
+    expect(result).toHaveLength(1);
+    // fieldH = 25 - 2*3 - min(round(25*0.3),10) = 19 - 7 = 12, which is > MIN_VISIBLE_HEIGHT(4)
+    expect(result[0]?.placement.height).toBeGreaterThan(0);
+  });
+
+  it('ignores zero-area text blocks when computing in-box coverage', () => {
+    // A text block with width=0 (zero area) should not be counted as coverage.
+    const textBlocks = [
+      {
+        text: 'ghost',
+        placement: { x: 55, y: 680, width: 0, height: 10 },
+        fontSize: 8,
+        fontName: 'TT1',
+      },
+    ];
+    // Despite the text block overlapping in y, zero area means it's not "inside".
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 120, 18], []] },
+      textBlocks,
+      612,
+    );
+    expect(result).toHaveLength(1); // not filtered out by coverage
   });
 });
 

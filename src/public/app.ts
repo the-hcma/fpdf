@@ -1,5 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
-import type { FpdfDocument, PdfPage, PdfField } from '../types.js';
+import type { FpdfDocument, PdfPage, PdfField, CandidateField } from '../types.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
@@ -213,7 +213,12 @@ function fitFontToBox(el: HTMLElement): void {
   }
 }
 
-function positionElement(el: HTMLElement, field: PdfField, page: PdfPage, scale: number): void {
+function positionElement(
+  el: HTMLElement,
+  field: { placement: PdfField['placement'] },
+  page: PdfPage,
+  scale: number,
+): void {
   const { x, y, width, height } = field.placement;
   el.style.left = `${String(x * scale)}px`;
   el.style.top = `${String((page.heightPt - y - height) * scale)}px`;
@@ -303,6 +308,55 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
   return wrapper;
 }
 
+function buildCandidateFieldElement(
+  field: CandidateField,
+  page: PdfPage,
+  scale: number,
+): HTMLElement {
+  let el: HTMLElement;
+  switch (field.type) {
+    case 'textarea': {
+      const ta = document.createElement('textarea');
+      ta.value = typeof field.value === 'string' ? field.value : '';
+      el = ta;
+      break;
+    }
+    case 'checkbox': {
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = field.value === true;
+      el = cb;
+      break;
+    }
+    default: {
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.value = typeof field.value === 'string' ? field.value : '';
+      el = input;
+      break;
+    }
+  }
+
+  el.title = field.label || field.displayName;
+  el.dataset.fieldId = field.id;
+  el.dataset.candidate = 'true';
+
+  if (field.type === 'text' || field.type === 'textarea') {
+    const maxSize = Math.round(field.placement.height * scale * FONT_RATIO);
+    el.dataset.maxFontSize = String(maxSize);
+    el.style.fontSize = `${String(maxSize)}px`;
+  }
+
+  el.style.width = '100%';
+  el.style.height = '100%';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-wrapper';
+  positionElement(wrapper, field, page, scale);
+  wrapper.appendChild(el);
+  return wrapper;
+}
+
 // ── Page rendering ────────────────────────────────────────────────────────────
 
 async function renderPage(
@@ -332,6 +386,13 @@ async function renderPage(
     const fieldWrapper = buildFieldElement(field, docPage, scale);
     overlay.appendChild(fieldWrapper);
     // Fit font for pre-filled values once the element is in the DOM.
+    const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
+    if (inputEl) fitFontToBox(inputEl);
+  }
+  for (const field of docPage.candidateFields) {
+    if (field.dismissed || field.confidence === 'low') continue;
+    const fieldWrapper = buildCandidateFieldElement(field, docPage, scale);
+    overlay.appendChild(fieldWrapper);
     const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
     if (inputEl) fitFontToBox(inputEl);
   }
@@ -367,25 +428,31 @@ function watchInputs(
   container: HTMLElement,
   fieldById: Map<string, PdfField>,
   onDirty: () => void,
+  candidateById: Map<string, CandidateField> = new Map<string, CandidateField>(),
 ): void {
   container.addEventListener('input', (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     const fieldId = target.dataset.fieldId;
     if (!fieldId) return;
-    const field = fieldById.get(fieldId);
-    if (!field) return;
-    const newValue = readInputValue(target, field);
-    field.value = newValue;
 
-    // For radio groups: propagate the selected option string to all sibling
-    // widgets in the same group (same field.name) so the in-memory doc stays
-    // consistent and the exporter receives the same string value for every widget.
-    if (field.type === 'radio') {
-      for (const f of fieldById.values()) {
-        if (f.name === field.name && f.id !== field.id) {
-          f.value = newValue;
+    const field = fieldById.get(fieldId);
+    if (field) {
+      const newValue = readInputValue(target, field);
+      field.value = newValue;
+      // For radio groups: propagate value to all sibling widgets.
+      if (field.type === 'radio') {
+        for (const f of fieldById.values()) {
+          if (f.name === field.name && f.id !== field.id) f.value = newValue;
         }
+      }
+    } else {
+      const candidate = candidateById.get(fieldId);
+      if (candidate) {
+        candidate.value =
+          target instanceof HTMLInputElement && target.type === 'checkbox'
+            ? target.checked
+            : (target as HTMLInputElement | HTMLTextAreaElement).value;
       }
     }
 
@@ -422,7 +489,13 @@ function initTabOrder(fpdfDoc: FpdfDocument, container: HTMLElement): void {
       if (field.readOnly) continue;
       const el = container.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
       if (!el) continue;
-      // PDF y=0 is the bottom; convert to top-down screen coordinates.
+      const screenY = page.heightPt - field.placement.y - field.placement.height;
+      entries.push({ el, globalY: cumulativeHeight + screenY, x: field.placement.x });
+    }
+    for (const field of page.candidateFields) {
+      if (field.dismissed || field.confidence === 'low') continue;
+      const el = container.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
+      if (!el) continue;
       const screenY = page.heightPt - field.placement.y - field.placement.height;
       entries.push({ el, globalY: cumulativeHeight + screenY, x: field.placement.x });
     }
@@ -713,16 +786,28 @@ async function main(): Promise<void> {
     }
   }
 
+  const candidateById = new Map<string, CandidateField>();
+  for (const page of fpdfDoc.pages) {
+    for (const field of page.candidateFields) {
+      candidateById.set(field.id, field);
+    }
+  }
+
   const debouncedSave = debounce(() => {
     setStatus(`${baseText} · Saving…`);
     sendSave(fpdfDoc);
   }, 800);
 
-  watchInputs(pagesContainer, fieldById, () => {
-    setStatus(`${baseText} · Unsaved changes`);
-    setSaveButtonDirty(true);
-    debouncedSave();
-  });
+  watchInputs(
+    pagesContainer,
+    fieldById,
+    () => {
+      setStatus(`${baseText} · Unsaved changes`);
+      setSaveButtonDirty(true);
+      debouncedSave();
+    },
+    candidateById,
+  );
 
   const saveBtn = document.getElementById('save');
   saveBtn?.addEventListener('click', () => {
@@ -741,6 +826,17 @@ async function main(): Promise<void> {
         el.checked = false;
       } else {
         (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value = '';
+        fitFontToBox(el);
+      }
+    }
+    for (const field of candidateById.values()) {
+      field.value = field.type === 'checkbox' ? false : '';
+      const el = document.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
+      if (!el) continue;
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        el.checked = false;
+      } else {
+        (el as HTMLInputElement | HTMLTextAreaElement).value = '';
         fitFontToBox(el);
       }
     }

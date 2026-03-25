@@ -4,3 +4,4 @@ coverage/
 *.fpdf.json
 *.env
 .DS_Store
+.claude/

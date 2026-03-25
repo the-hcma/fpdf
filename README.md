@@ -44,7 +44,8 @@ To build from source instead, see the [Quickstart](#quickstart-from-source).
 ```bash
 # Start an interactive fill session (auto-resumes from .fpdf.json if one exists)
 fpdf fill form.pdf
-fpdf fill form.pdf --open        # auto-launch browser
+fpdf fill form.pdf --open           # auto-launch browser
+fpdf fill form.pdf --fresh          # ignore saved session, re-analyze from scratch
 
 # Resume from a specific session file
 fpdf fill form.pdf --json form.fpdf.json
@@ -59,11 +60,30 @@ fpdf export form.fpdf.json -o filled.pdf
 
 `fpdf fill` prints a local URL (e.g. `http://127.0.0.1:51234`) to stdout. Open it in any browser to start filling. The server binds to `127.0.0.1` only and uses an OS-assigned port.
 
+Run `fpdf --help` to see all commands and their options in one view, or `fpdf <command> --help` for details on a specific command.
+
 ## Session file: `.fpdf.json`
 
 Every session produces a `.fpdf.json` file next to the original PDF. It stores field values, positions, and metadata in a human-readable format you can edit in any text editor. Re-running `fpdf fill` on the same PDF automatically resumes from it.
 
+Use `--fresh` to discard an existing session and re-analyze the PDF from scratch (useful when the PDF has changed or you want to start over without deleting the file manually).
+
 The file is safe to commit to version control — it contains no binary data and diffs cleanly.
+
+## Supported PDF types
+
+fpdf classifies every PDF by its form structure on first open and shows a status label in the UI:
+
+| Kind | Description | Fill | Export |
+|---|---|---|---|
+| **AcroForm** | Standard interactive PDF with AcroForm fields | ✅ | ✅ |
+| **XFA + AcroForm** (hybrid) | Has both XFA datasets and AcroForm widgets (e.g. Cigna forms) | ✅ | ✅ |
+| **Pure XFA** | XFA-only; no traditional AcroForm | ⚠️ limited | ⚠️ limited |
+| **No AcroForm** | Scanned or vector-drawn PDF with no interactive fields | ❌ | ❌ |
+
+### XFA regeneration
+
+For XFA-based PDFs (hybrid or pure), the UI offers a **Regenerate as standard PDF** button. This copies all page content into a new, XFA-free PDF with clean AcroForm widgets at the original field positions — pre-filled with any values you've already entered. The regenerated file is saved as `<original>.fpdf-converted.acroform.pdf` alongside the source, and the session switches to it automatically.
 
 ## Supported field types
 
@@ -81,6 +101,14 @@ fpdf export form.fpdf.json
 ```
 
 Writes filled values back into the original PDF and saves a new file alongside it (e.g. `form-filled.pdf`). Use `-o` to specify a different output path.
+
+## UI features
+
+- **Dark mode** — default theme; toggle between light and dark via the toolbar button. Preference is persisted in `localStorage`.
+- **Show/hide fields** — highlight all field boundaries as a blue overlay.
+- **Zoom** — toolbar buttons or Ctrl+scroll (mouse wheel).
+- **Tab order** — Tab and Shift+Tab step through fields in reading order (top-to-bottom, left-to-right).
+- **Copy path** — copies the absolute path of the current PDF to the clipboard.
 
 ## Print
 

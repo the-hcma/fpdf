@@ -1,11 +1,12 @@
 import { createServer } from 'node:http';
 import { watch } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { logger } from './logger.js';
 import { exportPdf } from './exporter.js';
+import { regenerateAsAcroForm } from './regenerator.js';
 import type { FpdfDocument } from './types.js';
 
 export interface ServerOptions {
@@ -35,7 +36,9 @@ export interface ServerHandle {
  * @returns A ServerHandle with the allocated URL and a close() function.
  */
 export async function startServer(options: ServerOptions): Promise<ServerHandle> {
-  const { pdfPath, doc, jsonPath } = options;
+  const { doc } = options;
+  let currentPdfPath = options.pdfPath;
+  let currentJsonPath = options.jsonPath;
 
   const app = express();
   app.use(express.json());
@@ -43,7 +46,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- PDF bytes ---
   app.get('/pdf', (_req, res) => {
     const run = async (): Promise<void> => {
-      const bytes = await readFile(pdfPath);
+      const bytes = await readFile(currentPdfPath);
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Length', String(bytes.length));
       res.end(bytes);
@@ -57,8 +60,8 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- Filled PDF export ---
   app.get('/filled-pdf', (_req, res) => {
     const run = async (): Promise<void> => {
-      const filled = await exportPdf(pdfPath, liveDoc);
-      const filename = `${path.basename(pdfPath, path.extname(pdfPath))}-filled.pdf`;
+      const filled = await exportPdf(currentPdfPath, liveDoc);
+      const filename = `${path.basename(currentPdfPath, path.extname(currentPdfPath))}-filled.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
       res.setHeader('Content-Length', String(filled.length));
@@ -87,6 +90,27 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- FpdfDocument JSON ---
   app.get('/doc', (_req, res) => {
     res.json(liveDoc);
+  });
+
+  // --- XFA → AcroForm regeneration ---
+  app.post('/regenerate-acroform', (_req, res) => {
+    const run = async (): Promise<void> => {
+      const result = await regenerateAsAcroForm(currentPdfPath, liveDoc);
+      currentPdfPath = result.newPdfPath;
+      currentJsonPath = result.newJsonPath;
+      liveDoc = result.newDoc;
+      const content = JSON.stringify(liveDoc, null, 2);
+      lastServerWriteContent = content;
+      await writeFile(currentJsonPath, content, 'utf-8');
+      broadcast(JSON.stringify({ type: 'pdfRegenerated', doc: liveDoc }));
+      res.json({ ok: true });
+    };
+    run().catch((err: unknown) => {
+      logger.error(
+        `regenerate-acroform failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      res.status(500).json({ error: String(err) });
+    });
   });
 
   // --- Static UI assets (src/public/) ---
@@ -148,11 +172,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         }
 
         liveDoc = msg.doc as FpdfDocument;
-        const { writeFile } = await import('node:fs/promises');
         lastServerWriteContent = JSON.stringify(liveDoc, null, 2);
-        await writeFile(jsonPath, lastServerWriteContent, 'utf-8');
+        await writeFile(currentJsonPath, lastServerWriteContent, 'utf-8');
         ws.send(JSON.stringify({ type: 'saved', updatedAt: new Date().toISOString() }));
-        logger.debug(`Saved ${jsonPath}`);
+        logger.debug(`Saved ${currentJsonPath}`);
       };
 
       handleMessage().catch((err: unknown) => {
@@ -176,17 +199,18 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   // Watch the parent directory so atomic renames (write-to-temp + rename) are detected.
   // Watching the file inode directly breaks when the file is replaced atomically.
-  const jsonDir = path.dirname(jsonPath);
-  const jsonFilename = path.basename(jsonPath);
+  // Use currentJsonPath (not a fixed copy) so the watcher picks up the file even after
+  // session switches to a regenerated PDF in the same directory.
+  const jsonDir = path.dirname(options.jsonPath);
 
   const jsonWatcher = watch(jsonDir, (_event, filename) => {
     // filename can be null on some platforms even when watching a directory;
     // treat null as "unknown file changed" and attempt the reload anyway.
-    if (filename !== null && filename !== jsonFilename) return;
+    if (filename !== null && filename !== path.basename(currentJsonPath)) return;
     const reload = async (): Promise<void> => {
       let text: string;
       try {
-        text = await readFile(jsonPath, 'utf-8');
+        text = await readFile(currentJsonPath, 'utf-8');
       } catch {
         // File transiently absent (atomic rename in progress) — skip; next event will succeed.
         return;
@@ -199,7 +223,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       lastServerWriteContent = null;
       liveDoc = JSON.parse(text) as FpdfDocument;
       broadcast(JSON.stringify({ type: 'docReload', doc: liveDoc }));
-      logger.debug(`Reloaded liveDoc from ${jsonPath}`);
+      logger.debug(`Reloaded liveDoc from ${currentJsonPath}`);
     };
     reload().catch((err: unknown) => {
       logger.error(`JSON reload error: ${err instanceof Error ? err.message : String(err)}`);

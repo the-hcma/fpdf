@@ -17,6 +17,7 @@ import {
   getXfaDatasetsInfo,
   parseXfaDatasetValues,
   patchXfaDatasetsXml,
+  computePdfKind,
 } from '../analyzer.js';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,8 @@ let buttonPdfPath: string;
 let vectorLinePdfPath: string;
 let vectorRectPdfPath: string;
 let rasterPdfPath: string;
+let hybridPdfPath: string;
+let rasterOcrPdfPath: string;
 let orphanWidgetPdfPath: string;
 
 beforeAll(async () => {
@@ -240,6 +243,32 @@ beforeAll(async () => {
     page.drawImage(img, { x: 100, y: 100, width: 200, height: 200 });
   });
   rasterPdfPath = await writeTempPdf('raster.pdf', rasterBytes);
+
+  // Hybrid: raster image + stroked vector rectangle on the same page
+  const hybridBytes = await makePdfBytes(async (doc) => {
+    const page = doc.addPage([612, 792]);
+    const img = await doc.embedJpg(MINIMAL_JPEG);
+    page.drawImage(img, { x: 100, y: 400, width: 100, height: 100 });
+    page.drawRectangle({
+      x: 50,
+      y: 200,
+      width: 150,
+      height: 16,
+      borderWidth: 0.5,
+      borderColor: rgb(0, 0, 0),
+    });
+  });
+  hybridPdfPath = await writeTempPdf('hybrid.pdf', hybridBytes);
+
+  // Raster+OCR: raster image + white text (simulates hidden OCR text layer)
+  const rasterOcrBytes = await makePdfBytes(async (doc) => {
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const page = doc.addPage([612, 792]);
+    const img = await doc.embedJpg(MINIMAL_JPEG);
+    page.drawImage(img, { x: 0, y: 0, width: 612, height: 792 });
+    page.drawText('ocr', { x: 10, y: 1, size: 6, font, color: rgb(1, 1, 1) });
+  });
+  rasterOcrPdfPath = await writeTempPdf('raster-ocr.pdf', rasterOcrBytes);
 
   // Orphan widget: a Widget annotation on a page not linked via /AcroForm
   // We create it using pdf-lib's low-level API so form.getFields() finds nothing.
@@ -689,6 +718,54 @@ describe('pageType detection', () => {
       expect(typeof page.pageType).toBe('string');
       expect(['acroform', 'vector', 'raster', 'raster+ocr', 'hybrid']).toContain(page.pageType);
     }
+  });
+
+  it('hybrid PDF (image + vector paths) is classified as hybrid', async () => {
+    const doc = await analyzePdf(hybridPdfPath);
+    expect(doc.pages[0]?.pageType).toBe('hybrid');
+  });
+
+  it('raster+ocr PDF (image + text layer) is classified as raster+ocr', async () => {
+    const doc = await analyzePdf(rasterOcrPdfPath);
+    expect(doc.pages[0]?.pageType).toBe('raster+ocr');
+  });
+
+  it('stores acroform pdfKind in metadata for AcroForm PDF', async () => {
+    const doc = await analyzePdf(textFieldPdfPath);
+    expect(doc.metadata.pdfKind).toBe('acroform');
+  });
+
+  it('stores no-acroform pdfKind in metadata for vector PDF', async () => {
+    const doc = await analyzePdf(vectorLinePdfPath);
+    expect(doc.metadata.pdfKind).toBe('no-acroform');
+  });
+
+  it('stores no-acroform pdfKind in metadata for raster PDF', async () => {
+    const doc = await analyzePdf(rasterPdfPath);
+    expect(doc.metadata.pdfKind).toBe('no-acroform');
+  });
+
+  it('stores no-acroform pdfKind in metadata for hybrid PDF', async () => {
+    const doc = await analyzePdf(hybridPdfPath);
+    expect(doc.metadata.pdfKind).toBe('no-acroform');
+  });
+});
+
+describe('computePdfKind', () => {
+  it('returns acroform when no XFA and has fields', () => {
+    expect(computePdfKind(false, true)).toBe('acroform');
+  });
+
+  it('returns no-acroform when no XFA and no fields', () => {
+    expect(computePdfKind(false, false)).toBe('no-acroform');
+  });
+
+  it('returns xfa-hybrid when XFA and has fields', () => {
+    expect(computePdfKind(true, true)).toBe('xfa-hybrid');
+  });
+
+  it('returns pure-xfa when XFA and no fields', () => {
+    expect(computePdfKind(true, false)).toBe('pure-xfa');
   });
 });
 

@@ -125,6 +125,14 @@ body {
   display: block;
 }
 
+.page-type-label {
+  font-size: 11px;
+  color: #999;
+  padding: 3px 6px;
+  text-align: right;
+  user-select: none;
+}
+
 /* ── Overlay ── */
 
 .overlay {
@@ -282,6 +290,10 @@ body {
   }
 
   #toolbar {
+    display: none;
+  }
+
+  .page-type-label {
     display: none;
   }
 

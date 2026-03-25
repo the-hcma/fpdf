@@ -13,6 +13,8 @@ fpdf/
 ├── src/
 │   ├── cli.ts              # Entry point, command parsing
 │   ├── analyzer.ts         # PDF field + geometry extraction
+│   ├── exporter.ts         # Write filled values back into a PDF (AcroForm + XFA)
+│   ├── regenerator.ts      # XFA → clean AcroForm PDF regeneration
 │   ├── server.ts           # Express local server + WebSocket for live save
 │   ├── types.ts            # Shared TypeScript interfaces
 │   └── public/
@@ -51,7 +53,8 @@ fpdf/
     "pdfHash": "sha256:abc123...",
     "createdAt": "2026-03-22T10:00:00Z",
     "updatedAt": "2026-03-22T10:05:00Z",
-    "pageCount": 2
+    "pageCount": 2,
+    "pdfKind": "acroform"
   },
   "pages": [
     {
@@ -124,6 +127,12 @@ fpdf/
 }
 ```
 
+### pdfKind notes
+- `pdfKind` is a document-level classification: `"acroform" | "xfa-hybrid" | "pure-xfa" | "no-acroform"`
+- Computed once in `analyzePdf()` via `computePdfKind(hasXfa, hasAcroFormFields)` and stored in `metadata`
+- The UI uses it to show banners: `xfa-hybrid` and `pure-xfa` offer a "Regenerate as standard PDF" action; `no-acroform` shows a scanned/vector warning
+- The exporter uses the stored `pdfKind` to choose the XFA or AcroForm write path without re-detecting at export time; falls back to runtime detection for old `.fpdf.json` files that predate this field
+
 ### pageType notes
 - `pageType` is one of `"acroform" | "vector" | "raster" | "raster+ocr" | "hybrid"`
 - Determined per-page by scanning the pdfjs-dist operator list; `acroform` takes precedence if `pdf-lib` finds any AcroForm fields on the page
@@ -167,14 +176,17 @@ fpdf/
 ```bash
 fpdf fill <file.pdf>                              # Analyze PDF, start server, print URL to stdout
 fpdf fill <file.pdf> --open                       # Same, and also launch the default browser
-fpdf fill <file.pdf> --json <existing.fpdf.json>  # Resume from a saved JSON session
+fpdf fill <file.pdf> --json <existing.fpdf.json>  # Resume from a specific saved session file
+fpdf fill <file.pdf> --fresh                      # Ignore any existing .fpdf.json; re-analyze from scratch
 fpdf analyze <file.pdf>                           # Only extract fields, write JSON, no server
-fpdf export <file.fpdf.json>                      # Write filled values back into a new PDF (v2)
+fpdf export <file.fpdf.json>                      # Write filled values back into a new PDF
+fpdf export <file.fpdf.json> -o out.pdf           # Same, with an explicit output path
 ```
 
 - The server always binds on **port 0** — the OS picks a free port at runtime.
 - The CLI prints the allocated URL to stdout: `Listening on http://127.0.0.1:PORT`
 - `--open` (optional flag) calls the system's default browser automatically. Without it the user copies the URL manually.
+- `--fresh` discards the existing session and re-runs `analyzePdf()`, overwriting the `.fpdf.json`. Use this when the PDF has changed or you want to start over without manual file deletion.
 
 ---
 
@@ -285,20 +297,24 @@ cssHeight = field.height * scale
 ## Data Flow
 
 ```
-fpdf fill form.pdf
+fpdf fill form.pdf [--fresh] [--open] [--json path]
    │
-   ├─ Does form.fpdf.json exist?
-   │     ├─ Yes → load it (skip analysis, restore existing values)
-   │     └─ No  → run analyzer → write form.fpdf.json
+   ├─ --fresh flag set?
+   │     ├─ Yes → run analyzer → overwrite form.fpdf.json
+   │     └─ No  → does form.fpdf.json exist?
+   │                 ├─ Yes → load it (skip analysis, restore existing values)
+   │                 └─ No  → run analyzer → write form.fpdf.json
    │
    ├─ Start Express server on port 0 (OS-allocated)
-   ├─ Serve: PDF bytes, JSON data, static UI assets
-   ├─ Print "Listening on http://127.0.0.1:PORT" to stdout
+   ├─ Serve: PDF bytes (/pdf), JSON (/doc), filled export (/filled-pdf), static UI assets
+   ├─ POST /regenerate-acroform → regenerator.ts → saves <name>.fpdf-converted.acroform.pdf
+   ├─ Print URL to stdout
    ├─ If --open flag: launch default browser automatically
    │
    └─ WebSocket channel:
          UI ──(field change)──▶ server ──▶ writes form.fpdf.json
          server ──(saved ack)──▶ UI status bar
+         server ──(pdfRegenerated)──▶ UI reloads page
 ```
 
 ---
@@ -326,7 +342,10 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | 10.5 | `03-23-feat_orphan_widget_fallback` | Walk each page's raw `/Annots` array after `form.getFields()` to recover Widget annotations missed due to a broken `/AcroForm` field tree; extract orphans as regular `PdfField` entries (fully AcroForm-backed, exportable) | ✅ |
 | 10.6 | `03-23-feat_orphan_widget_fallback` | XFA support: detect `/AcroForm/XFA` datasets packet, decode FlateDecode stream, parse flat XML for initial values; on export, patch datasets XML with filled values and re-compress; `PDFHexString` support in `buildFullFieldName` so orphan widget walk works for hybrid XFA+AcroForm PDFs (e.g. Cigna); radio `PDFName` on-value fix | ✅ |
 | 10.7 | `03-23-feat_orphan_widget_fallback` | "No usable fields" handling for print-and-fill forms (e.g. Cigna pharmacy claim form): PDFs where `/Fields[]` is empty, no orphan widgets exist, and all candidate fields are low-confidence (flat lines that are not visible rectangles). Confidence cap: paths with height < `MIN_VISIBLE_HEIGHT` (4pt) are always `low` regardless of label. CLI warns and UI shows a dismissable yellow banner when no page has AcroForm fields or medium/high candidateFields. | ✅ |
-| 10.8 | — | XFA → AcroForm regeneration (additive): existing hybrid XFA fill/export support is preserved as-is. In addition, for XFA-backed PDFs, offer to generate a clean AcroForm-only PDF via `pdf-lib.copyPages()` + fresh AcroForm widgets at the known field positions; save as `<original>-acroform.pdf`; switch the session to the new file so the user fills and exports the regenerated PDF instead. UI surfaces a banner on XFA-detected PDFs with a "Regenerate as standard PDF" option alongside the normal fill flow. Pure-XFA PDFs (no traditional content stream) must be detected upfront and warned. | 🔲 |
+| 10.8 | `03-24-feat_add_pdfkind_discriminant_and_ui_support_banners_for_pdf_type` | `PdfKind` document-level discriminant: `computePdfKind()` stored in `.fpdf.json` metadata; exporter uses stored kind instead of re-detecting XFA; UI status bar shows human-readable kind + per-page type labels; banners for `pure-xfa`, `no-acroform/raster`, `no-acroform/vector`; regression fix for field overlay positioning (page label moved outside `.page-wrapper`) | ✅ |
+| UI.1 | `03-24-feat_dark_mode_toggle_default_dark` | Dark mode: default dark via `<body data-theme="dark">`; all colours replaced with CSS custom properties; theme IIFE applied before `main()` to prevent flash; `localStorage` persistence; toolbar toggle button | ✅ |
+| 10.9 | `03-24-feat_xfa_acroform_regeneration` `03-24-feat_xfa_acroform_regeneration_m10.8_` | XFA → AcroForm regeneration: `regenerator.ts` copies pages via `pdf-lib.copyPages()`, re-creates AcroForm widgets at stored field positions, pre-fills values, saves as `<original>.fpdf-converted.acroform.pdf`; `POST /regenerate-acroform` server endpoint; server session switches to regenerated file; "Regenerate as standard PDF" button in warn banner for `xfa-hybrid`/`pure-xfa` docs; `pdfRegenerated` WS message triggers page reload | ✅ |
+| CLI.2 | `03-24-feat_add_--fresh_flag_to_fpdf_fill_to_force_re-analysis` | `--fresh` flag for `fpdf fill`: skips loading any existing `.fpdf.json` and re-runs `analyzePdf()` unconditionally; top-level `--help` now shows all subcommand options inline (built dynamically from registered commands) | ✅ |
 | CI | `03-23-chore_ci_workflow` | GitHub Actions CI: `npm run check` + `npm test` on every PR and push to `main`; Node 24; v8 branch coverage threshold set to 73% (Node 22/24 measure ~2% lower than Node 25) | ✅ |
 | CI.1 | `03-23-fix_ci_branch_coverage` | Fix CI branch coverage regression: add tests for XFA radio translation, `/filled-pdf` route, WS write-error path, boolean-to-text fallback, transiently-absent JSON file; isolate watcher race condition in test suite | ✅ |
 | 11 | — | UI renders `candidateFields` in a distinct style per confidence level (dashed border, muted background); each widget has a dismiss × button that sets `dismissed: true` and saves; toolbar toggle shows/hides dismissed candidates | 🔲 |

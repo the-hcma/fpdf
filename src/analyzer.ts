@@ -32,6 +32,7 @@ import type {
   FieldType,
   TextBlock,
   PageType,
+  PdfKind,
   CandidateField,
   CandidateFieldConfidence,
 } from './types.js';
@@ -821,6 +822,20 @@ export function detectCandidateFields(
 }
 
 /**
+ * Derive the document-level PDF kind from XFA presence and AcroForm field count.
+ *
+ * @param hasXfa True when the PDF has an /AcroForm/XFA datasets packet.
+ * @param hasAcroFormFields True when at least one AcroForm field was collected
+ *   (from either form.getFields() or the orphan widget walk).
+ */
+export function computePdfKind(hasXfa: boolean, hasAcroFormFields: boolean): PdfKind {
+  if (hasXfa && hasAcroFormFields) return 'xfa-hybrid';
+  if (hasXfa && !hasAcroFormFields) return 'pure-xfa';
+  if (hasAcroFormFields) return 'acroform';
+  return 'no-acroform';
+}
+
+/**
  * Analyze a PDF file and extract all AcroForm fields into an FpdfDocument.
  *
  * @param filePath Absolute or relative path to the PDF file.
@@ -963,6 +978,9 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     }
   }
 
+  const totalAcroFields = [...pageFields.values()].reduce((n, arr) => n + arr.length, 0);
+  const pdfKind: PdfKind = computePdfKind(isXfaPdf, totalAcroFields > 0);
+
   const pages: PdfPage[] = [];
   for (let p = 1; p <= pageCount; p++) {
     const page = pdfDoc.getPage(p - 1);
@@ -1011,6 +1029,7 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     createdAt: now,
     updatedAt: now,
     pageCount,
+    pdfKind,
   };
 
   return { metadata, pages };

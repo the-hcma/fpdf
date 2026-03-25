@@ -137,6 +137,9 @@ function initWebSocket(
       onSaved(typeof updatedAt === 'string' ? updatedAt : new Date().toISOString());
     } else if (m.type === 'docReload' && typeof m.doc === 'object' && m.doc !== null) {
       onReload(m.doc as FpdfDocument);
+    } else if (m.type === 'pdfRegenerated') {
+      // Server switched to the regenerated PDF — reload the page to pick up the new PDF + doc.
+      window.location.reload();
     }
   });
 
@@ -646,11 +649,49 @@ async function main(): Promise<void> {
 
   // Show a banner when the PDF kind has limited or no support.
   const pdfKind = fpdfDoc.metadata.pdfKind;
-  if (pdfKind === 'pure-xfa') {
+  if (pdfKind === 'xfa-hybrid') {
     showWarning(
-      'This PDF uses pure XFA forms, which are not yet fully supported. ' +
-        'Fields may be missing or export may not work correctly.',
+      'This PDF uses XFA form technology. Fill it normally, or regenerate for broader PDF reader compatibility.',
     );
+    const regenBtn = document.getElementById('regen-btn');
+    if (regenBtn) {
+      regenBtn.removeAttribute('hidden');
+      regenBtn.addEventListener('click', () => {
+        (regenBtn as HTMLButtonElement).disabled = true;
+        regenBtn.textContent = 'Regenerating\u2026';
+        fetch('/regenerate-acroform', { method: 'POST' })
+          .then((r) => {
+            if (!r.ok) return r.text().then((t) => Promise.reject(new Error(t)));
+            // pdfRegenerated WS message will trigger window.location.reload()
+          })
+          .catch((err: unknown) => {
+            (regenBtn as HTMLButtonElement).disabled = false;
+            regenBtn.textContent = 'Regenerate as standard PDF';
+            showError(err instanceof Error ? err.message : String(err));
+          });
+      });
+    }
+  } else if (pdfKind === 'pure-xfa') {
+    showWarning(
+      'This PDF uses pure XFA form technology. Page content may not be visible in all viewers.',
+    );
+    const regenBtn = document.getElementById('regen-btn');
+    if (regenBtn) {
+      regenBtn.removeAttribute('hidden');
+      regenBtn.addEventListener('click', () => {
+        (regenBtn as HTMLButtonElement).disabled = true;
+        regenBtn.textContent = 'Regenerating\u2026';
+        fetch('/regenerate-acroform', { method: 'POST' })
+          .then((r) => {
+            if (!r.ok) return r.text().then((t) => Promise.reject(new Error(t)));
+          })
+          .catch((err: unknown) => {
+            (regenBtn as HTMLButtonElement).disabled = false;
+            regenBtn.textContent = 'Regenerate as standard PDF';
+            showError(err instanceof Error ? err.message : String(err));
+          });
+      });
+    }
   } else if (pdfKind === 'no-acroform') {
     const pageTypes = new Set(fpdfDoc.pages.map((p) => p.pageType));
     if (pageTypes.has('raster') || pageTypes.has('raster+ocr')) {

@@ -8,6 +8,8 @@ import {
   PDFRef,
   PDFName,
   PDFDict,
+  StandardFonts,
+  rgb,
 } from 'pdf-lib';
 import type { FpdfDocument, PdfKind } from './types.js';
 import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from './analyzer.js';
@@ -89,6 +91,8 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     }
   }
 
+  await drawCandidateValues(pdfDoc, doc);
+
   if (isXfa && xfaInfo !== null) {
     // ── XFA hybrid PDF ───────────────────────────────────────────────────────
     //
@@ -124,6 +128,66 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
   }
 
   return pdfDoc.save();
+}
+
+/**
+ * Stamp candidate field values directly onto the page as drawn text.
+ * Used for PDFs that have no AcroForm widgets (vector/no-acroform PDFs).
+ * Each candidate field with a non-empty value gets a text overlay drawn at
+ * the field's placement rectangle.  Checkboxes get an "X" when checked.
+ */
+async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Promise<void> {
+  const hasCandidates = doc.pages.some((p) => p.candidateFields.some((c) => !c.dismissed));
+  if (!hasCandidates) return;
+
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const COLOR = rgb(0, 0, 0);
+  const TEXT_PADDING = 2; // pt from the left/bottom edge of the field
+
+  for (const docPage of doc.pages) {
+    const candidatesWithValues = docPage.candidateFields.filter((c) => {
+      if (c.dismissed) return false;
+      if (c.type === 'checkbox') return c.value === true;
+      return typeof c.value === 'string' && c.value.trim() !== '';
+    });
+    if (candidatesWithValues.length === 0) continue;
+
+    // pdf-lib pages are 1-indexed via getPage(index) where index is 0-based.
+    const page = pdfDoc.getPage(docPage.pageNumber - 1);
+
+    for (const candidate of candidatesWithValues) {
+      const { x, y, width, height } = candidate.placement;
+      const fontSize = Math.max(6, Math.round(height * 0.7));
+
+      if (candidate.type === 'checkbox') {
+        // Draw a centred "X" for checked checkboxes.
+        const mark = 'X';
+        const markSize = Math.max(6, Math.round(height * 0.8));
+        page.drawText(mark, {
+          x: x + (width - font.widthOfTextAtSize(mark, markSize)) / 2,
+          y: y + (height - markSize) / 2,
+          size: markSize,
+          font,
+          color: COLOR,
+        });
+      } else {
+        const value = candidate.value as string;
+        // Clamp the font size so the text fits within the field width.
+        let size = fontSize;
+        while (size > 6 && font.widthOfTextAtSize(value, size) > width - TEXT_PADDING * 2) {
+          size -= 0.5;
+        }
+        page.drawText(value, {
+          x: x + TEXT_PADDING,
+          y: y + TEXT_PADDING,
+          size,
+          font,
+          color: COLOR,
+          maxWidth: width - TEXT_PADDING * 2,
+        });
+      }
+    }
+  }
 }
 
 /**

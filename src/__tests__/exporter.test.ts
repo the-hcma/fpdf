@@ -7,7 +7,7 @@ import { PDFDocument, PDFName, PDFString, PDFRawStream, PDFDict, PDFRef } from '
 import { deflateSync } from 'node:zlib';
 import { exportPdf } from '../exporter.js';
 import { getXfaDatasetsInfo } from '../analyzer.js';
-import type { FpdfDocument, PdfField, PdfKind } from '../types.js';
+import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -407,6 +407,151 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const result = await PDFDocument.load(bytes);
     const selected = result.getForm().getRadioGroup('agree').getSelected();
     expect(selected).toBe('Yes');
+  });
+
+  // ── Candidate field overlay (drawCandidateValues) ──────────────────────────
+
+  it('draws candidate text values as a text overlay on the exported PDF', async () => {
+    // Build a plain PDF with no AcroForm fields.
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf('plain-candidate.pdf', plainBytes);
+
+    const candidate: CandidateField = {
+      id: 'c1',
+      type: 'text',
+      label: 'Name',
+      displayName: 'Name',
+      placement: { x: 50, y: 700, width: 200, height: 20 },
+      value: 'Alice',
+      confidence: 'high',
+      dismissed: false,
+    };
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-candidate.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const bytes = await exportPdf(plainPath, doc);
+    // The exported PDF should be valid and loadable (text is drawn as content stream).
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+    // No AcroForm fields — the form has no fields.
+    expect(result.getForm().getFields()).toHaveLength(0);
+  });
+
+  it('draws an X for a checked candidate checkbox', async () => {
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf('plain-checkbox-candidate.pdf', plainBytes);
+
+    const candidate: CandidateField = {
+      id: 'c2',
+      type: 'checkbox',
+      label: 'Agree',
+      displayName: 'Agree',
+      placement: { x: 50, y: 700, width: 12, height: 12 },
+      value: true,
+      confidence: 'medium',
+      dismissed: false,
+    };
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-checkbox-candidate.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const bytes = await exportPdf(plainPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+  });
+
+  it('skips dismissed candidate fields', async () => {
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf('plain-dismissed.pdf', plainBytes);
+
+    const candidate: CandidateField = {
+      id: 'c3',
+      type: 'text',
+      label: 'Name',
+      displayName: 'Name',
+      placement: { x: 50, y: 700, width: 200, height: 20 },
+      value: 'Alice',
+      confidence: 'high',
+      dismissed: true,
+    };
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-dismissed.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    // Should not throw; dismissed candidate is silently skipped.
+    const bytes = await exportPdf(plainPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
   });
 
   it('falls back to direct select when on-value is not found; swallows the error if invalid', async () => {

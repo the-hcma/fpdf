@@ -100,6 +100,10 @@ export function deriveDisplayName(label: string): string {
   // Strip leading field number ("2 " or "12 ")
   let result = label.replace(/^\d+\s*/, '');
 
+  // Truncate at first colon — "Patient Name:" → "Patient Name"
+  const colonIdx = result.indexOf(':');
+  if (colonIdx > 0) result = result.slice(0, colonIdx);
+
   // Remove "in N" back-references to other field numbers
   result = result.replace(/\s+in\s+\d+\b/gi, '');
 
@@ -572,6 +576,12 @@ const CHECKBOX_MAX_DIM = 15; // pt — near-square boxes this size are checkboxe
 const TEXTAREA_MIN_H = 30; // pt — tall boxes are textareas
 const NOISE_WIDTH_RATIO = 0.85; // fraction of page width → structural rule
 const MIN_VISIBLE_HEIGHT = 4; // pt — below this the path is a line, not a visible rectangle
+const MAX_DIVIDER_HEIGHT = 20; // pt — thin stroked shapes in this range act as section dividers
+const COVERAGE_FILTER_THRESHOLD = 0.55; // > 55% text area coverage → instruction/content block, not a field
+/** Width ratio: an H-line used as a "container" boundary must be this much wider than the column line. */
+const CONTAINMENT_WIDTH_RATIO = 1.3;
+/** Inset applied to all four sides of a candidate field so the input does not overlap border lines. */
+const FIELD_MARGIN = 3; // pt
 
 /**
  * Classify a PDF page based on its operator list and AcroForm field count.
@@ -661,8 +671,12 @@ function findNearestLabel(
     // Above: block baseline within [field.top, field.top + 2*fontSize]
     const fieldTop = box.y + box.h;
     const isAbove = by >= fieldTop && by <= fieldTop + 2 * fs;
-    // Horizontal overlap: block x-range overlaps field x-range
-    const horizontalOverlap = bx < box.x + box.w && bx + bw > box.x;
+    // Horizontal overlap: block x-range overlaps field x-range AND the block's
+    // centre falls within the field x-range (avoids picking up a left-column
+    // label for a right-column field when they share only partial x overlap).
+    const blockCx = bx + bw / 2;
+    const horizontalOverlap =
+      bx < box.x + box.w && bx + bw > box.x && blockCx >= box.x && blockCx <= box.x + box.w;
 
     // Left: vertically aligned within 1 line height, block ends before field starts
     const isLeft = Math.abs(by - box.y) < fs && bx + bw < box.x + 5;
@@ -681,6 +695,66 @@ function findNearestLabel(
 }
 
 /**
+ * Return all TextBlocks that are substantially contained within [rx, ry, rw, rh]
+ * (PDF coordinates, bottom-left origin). A block qualifies when at least 50% of
+ * its own area overlaps with the rectangle — this avoids long paragraph blocks
+ * whose centre happens to lie inside a small shape (e.g. a 12pt checkbox).
+ * Results are sorted by descending area so the largest block comes first.
+ */
+function findInsideText(
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number,
+  textBlocks: TextBlock[],
+): TextBlock[] {
+  return textBlocks
+    .filter((b) => {
+      const bx = b.placement.x;
+      const by = b.placement.y;
+      const bw = b.placement.width;
+      const bh = b.placement.height;
+      const blockArea = bw * bh;
+      if (blockArea <= 0) return false;
+      const overlapX = Math.max(0, Math.min(bx + bw, rx + rw) - Math.max(bx, rx));
+      const overlapY = Math.max(0, Math.min(by + bh, ry + rh) - Math.max(by, ry));
+      return (overlapX * overlapY) / blockArea >= 0.5;
+    })
+    .sort(
+      (a, b) => b.placement.width * b.placement.height - a.placement.width * a.placement.height,
+    );
+}
+
+/**
+ * Fraction of the rectangle's area actually covered by the parts of the interior
+ * text blocks that fall inside it. Uses true intersection area rather than the
+ * full block area so that blocks which extend beyond the field boundary are not
+ * over-counted.
+ */
+function textCoverageRatio(
+  rx: number,
+  ry: number,
+  rw: number,
+  rh: number,
+  insideBlocks: TextBlock[],
+): number {
+  const fieldArea = rw * rh;
+  if (fieldArea <= 0 || insideBlocks.length === 0) return 0;
+  const overlapArea = insideBlocks.reduce((sum, b) => {
+    const ox = Math.max(
+      0,
+      Math.min(b.placement.x + b.placement.width, rx + rw) - Math.max(b.placement.x, rx),
+    );
+    const oy = Math.max(
+      0,
+      Math.min(b.placement.y + b.placement.height, ry + rh) - Math.max(b.placement.y, ry),
+    );
+    return sum + ox * oy;
+  }, 0);
+  return Math.min(overlapArea / fieldArea, 1);
+}
+
+/**
  * Evaluate a bounding box (already in page space) as a candidate field.
  * Applies noise filtering, type inference, label proximity, and confidence scoring.
  */
@@ -694,6 +768,7 @@ function evaluateBox(
 
   // Noise filter
   if (w > pageWidth * NOISE_WIDTH_RATIO) return; // full-width structural rule
+  if (h < MIN_VISIBLE_HEIGHT || w < MIN_VISIBLE_HEIGHT) return; // decorative line/rule
   const mightBeCheckbox = Math.abs(w - h) < 4 && w >= 5 && w <= CHECKBOX_MAX_DIM;
   if (!mightBeCheckbox && w < MIN_FIELD_WIDTH && h < MIN_FIELD_WIDTH) return; // tiny artifact
   if (h > MAX_FIELD_HEIGHT && w / (h || 1) < 2) return; // tall non-wide shape
@@ -708,32 +783,109 @@ function evaluateBox(
     type = 'text';
   }
 
-  // Label proximity
-  const labelBlock = findNearestLabel({ x, y, w, h }, textBlocks);
-  const label = labelBlock?.text ?? '';
+  // In-box text analysis: filter instruction blocks and derive labels from interior text.
+  const insideBlocks = findInsideText(x, y, w, h, textBlocks);
+  const coverage = textCoverageRatio(x, y, w, h, insideBlocks);
+  if (coverage > COVERAGE_FILTER_THRESHOLD) {
+    return; // instruction/content block, not a field
+  }
+
+  // Filter out inside blocks that are clearly section headers: font size larger
+  // than the cell height means it's a title/header bar, not a field label.
+  const labelBlocks = insideBlocks.filter((b) => b.fontSize <= h * 1.1);
+
+  const insideLabel = labelBlocks[0] ?? null;
+  const externalLabel = insideLabel === null ? findNearestLabel({ x, y, w, h }, textBlocks) : null;
+  const labelSource: 'inside' | 'external' | 'none' =
+    insideLabel !== null ? 'inside' : externalLabel !== null ? 'external' : 'none';
+  const rawLabel =
+    labelSource === 'inside'
+      ? labelBlocks
+          .map((b) => {
+            // 1. Strip parenthesised helper text — e.g. "(use a separate form for
+            //    each family member)" is instructional, not a field label.
+            const stripped = b.text.replace(/\s*\([^)]*\)/g, '').trim();
+            if (stripped.length === 0) return '';
+
+            // 2. If this block extends beyond the cell's right edge by more than 10%
+            //    of the cell width, it is a row-spanning label strip.  Clip it
+            //    proportionally and snap to the last word boundary.
+            const blockRight = b.placement.x + b.placement.width;
+            const cellRight = x + w;
+            let candidate = stripped;
+            if (blockRight > cellRight + w * 0.1) {
+              const fraction = Math.max(0, cellRight - b.placement.x) / b.placement.width;
+              const cutChar = Math.round(fraction * stripped.length);
+              const clipped = stripped.slice(0, cutChar);
+              const lastSpace = clipped.lastIndexOf(' ');
+              candidate = (
+                lastSpace > cutChar * 0.4 ? clipped.slice(0, lastSpace) : clipped
+              ).replace(/[:\s]+$/, '');
+            }
+
+            // 3. If the result looks like a multi-column row label ("Name : Date"),
+            //    take only the first segment (this column's label).
+            const colonSplit = candidate.split(/\s+:\s+/);
+            return colonSplit[0]?.replace(/[:\s]+$/, '').trim() ?? '';
+          })
+          .filter((s) => s.length > 0)
+          .join(' ')
+          .trim()
+      : (externalLabel?.text ?? '');
+  // Strip non-printable characters that appear when the PDF uses a proprietary
+  // font encoding that pdfjs-dist cannot decode. If the result is empty the
+  // field is still usable — the user sees an unlabelled candidate in the UI.
+  // eslint-disable-next-line no-control-regex
+  const label = rawLabel.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '').trim();
 
   // Confidence
   let confidence: CandidateFieldConfidence;
   const goodGeometry =
     (type === 'checkbox' && w <= CHECKBOX_MAX_DIM) ||
     (type !== 'checkbox' && w >= MIN_FIELD_WIDTH && h <= MAX_FIELD_HEIGHT);
-  if (goodGeometry && labelBlock) {
+  if (goodGeometry && labelSource === 'inside') {
     confidence = 'high';
-  } else if (goodGeometry || labelBlock) {
+  } else if (goodGeometry) {
+    // external label or no label — geometry alone is trustworthy
+    confidence = 'medium';
+  } else if (labelSource !== 'none') {
     confidence = 'medium';
   } else {
     confidence = 'low';
   }
-  // Paths where either dimension is below MIN_VISIBLE_HEIGHT are lines (horizontal or
-  // vertical), not visible rectangular boxes. They cannot be medium or high regardless of label.
-  if (h < MIN_VISIBLE_HEIGHT || w < MIN_VISIBLE_HEIGHT) confidence = 'low';
+
+  // Compute the fillable placement: apply a uniform margin on all sides so the
+  // input element does not overlap the drawn border lines.  For in-box-label
+  // fields, additionally crop the top edge down to just below the label text
+  // so the user fills in the blank area rather than typing over the label.
+  const fieldX = x + FIELD_MARGIN;
+  const fieldY = y + FIELD_MARGIN;
+  const fieldW = w - 2 * FIELD_MARGIN;
+  let fieldH = h - 2 * FIELD_MARGIN;
+
+  if (labelSource === 'inside' && type !== 'checkbox' && insideBlocks.length > 0) {
+    // The label sits near the top of the cell (high PDF y). Find the lowest
+    // bottom edge of any label block — the fillable area is below that point.
+    const labelFloor = Math.min(...insideBlocks.map((b) => b.placement.y));
+    const newTop = labelFloor - FIELD_MARGIN; // top of fillable area in PDF coords
+    fieldH = newTop - fieldY;
+    // If the label fills so much of the cell that there is no room, skip.
+    if (fieldH < MIN_VISIBLE_HEIGHT) return;
+  } else if (insideBlocks.length === 0 && type !== 'checkbox' && h >= 20) {
+    // No inside text at all — likely a proprietary/undecodable label font.
+    // Reserve a fixed strip at the top of the cell so the input doesn't
+    // overlap any visually-printed label that pdfjs-dist could not decode.
+    const defaultInset = Math.min(Math.round(h * 0.3), 10);
+    fieldH -= defaultInset;
+    if (fieldH < MIN_VISIBLE_HEIGHT) return;
+  }
 
   candidates.push({
     id: randomUUID(),
     type,
     label,
-    displayName: label,
-    placement: { x, y, width: w, height: h },
+    displayName: deriveDisplayName(label),
+    placement: { x: fieldX, y: fieldY, width: fieldW, height: fieldH },
     value: type === 'checkbox' ? false : '',
     confidence,
     dismissed: false,
@@ -752,6 +904,14 @@ function evaluateBox(
  * CTM tracking via OPS.save / OPS.restore / OPS.transform ensures correct page coords
  * when paths are drawn in a local coordinate space (e.g. pdf-lib drawRectangle).
  */
+/** Tolerance (points) used when grouping H-lines by their x-extent into grid columns. */
+const HLINE_SNAP = 5;
+
+/** Snap a value to the nearest multiple of HLINE_SNAP for loose grouping. */
+function hSnap(v: number): number {
+  return Math.round(v / HLINE_SNAP) * HLINE_SNAP;
+}
+
 export function detectCandidateFields(
   ops: { fnArray: number[]; argsArray: unknown[][] },
   textBlocks: TextBlock[],
@@ -765,6 +925,28 @@ export function detectCandidateFields(
 
   // Pending rect from OPS.rectangle (legacy path: rectangle → stroke)
   let pendingRect: { x: number; y: number; w: number; h: number } | null = null;
+
+  // Horizontal line segments (h < MIN_VISIBLE_HEIGHT) collected for grid-cell reconstruction.
+  const hLines: { x: number; y: number; w: number }[] = [];
+
+  /**
+   * Route a stroked box: if it is a near-zero-height line, collect it for grid
+   * reconstruction; otherwise evaluate it immediately as a candidate.
+   */
+  function routeBox(box: { x: number; y: number; w: number; h: number }): void {
+    if (box.h < MIN_VISIBLE_HEIGHT && box.w >= MIN_FIELD_WIDTH) {
+      hLines.push({ x: box.x, y: box.y, w: box.w });
+    } else {
+      // Wide thin shapes (section header bars) act as row dividers even when
+      // they are too wide to be candidate fields themselves.  Record their
+      // bottom y so the grid-cell reconstruction can pair them with narrower
+      // column H-lines (Phase 2 below).
+      if (box.h <= MAX_DIVIDER_HEIGHT && box.w >= MIN_FIELD_WIDTH) {
+        hLines.push({ x: box.x, y: box.y, w: box.w });
+      }
+      evaluateBox(box, textBlocks, pageWidth, candidates);
+    }
+  }
 
   for (let i = 0; i < ops.fnArray.length; i++) {
     const fn = ops.fnArray[i] ?? -1;
@@ -789,32 +971,155 @@ export function detectCandidateFields(
       }
     } else if (fn === OPS.stroke || fn === OPS.closeStroke) {
       // Legacy stroke after OPS.rectangle
-      if (pendingRect) evaluateBox(pendingRect, textBlocks, pageWidth, candidates);
+      if (pendingRect) routeBox(pendingRect);
       pendingRect = null;
     } else if (fn === OPS.constructPath) {
       // pdfjs-dist v5+ format: args = [paintOp, interleavedOpsAndCoords, Float32Array bbox]
       const paintOp = args[0] as number;
-      const bbox = args[2] as Float32Array | number[] | undefined;
+      const bbox = args[2] as Float32Array | number[] | null | undefined;
       if (
-        (paintOp === OPS.stroke || paintOp === OPS.closeStroke) &&
+        (paintOp === OPS.stroke ||
+          paintOp === OPS.closeStroke ||
+          paintOp === OPS.fillStroke ||
+          paintOp === OPS.closeFillStroke ||
+          paintOp === OPS.eoFillStroke ||
+          paintOp === OPS.closeEOFillStroke) &&
         bbox !== undefined &&
+        bbox !== null &&
         bbox.length >= 4
       ) {
         const [bx0 = 0, bx1 = 0, bx2 = 0, bx3 = 0] = bbox;
-        const box = bboxToBox(ctm, bx0, bx1, bx2, bx3);
-        evaluateBox(box, textBlocks, pageWidth, candidates);
+        routeBox(bboxToBox(ctm, bx0, bx1, bx2, bx3));
       }
+      pendingRect = null;
+    } else if (fn === OPS.fillStroke || fn === OPS.closeFillStroke) {
+      // Legacy fill+stroke after OPS.rectangle — treat the same as stroke-only.
+      if (pendingRect) routeBox(pendingRect);
       pendingRect = null;
     } else if (
       fn === OPS.fill ||
       fn === OPS.eoFill ||
-      fn === OPS.fillStroke ||
       fn === OPS.eoFillStroke ||
-      fn === OPS.closeFillStroke ||
       fn === OPS.closeEOFillStroke ||
       fn === OPS.endPath
     ) {
       pendingRect = null; // filled/abandoned paths are not blank form fields
+    }
+  }
+
+  // ── Grid-cell reconstruction ─────────────────────────────────────────────────
+  // Forms that draw fields as a grid of horizontal underlines (not closed boxes)
+  // leave no strokeable rectangles in the operator list. Reconstruct the implied
+  // cells by grouping H-lines that share the same x-range and pairing consecutive
+  // lines to form rows.
+  //
+  // Grouping key: snap(x) + "," + snap(x+w) — loose enough to merge lines that
+  // are drawn in multiple passes with ±1–2 pt variation.
+  const hLineGroups = new Map<string, { x: number; y: number; w: number }[]>();
+  const seenHLine = new Set<string>();
+
+  for (const line of hLines) {
+    // Deduplicate lines that appear from multiple drawing passes at the same position.
+    const sx = hSnap(line.x).toString();
+    const sxw = hSnap(line.x + line.w).toString();
+    const dedupKey = `${sx},${sxw},${hSnap(line.y).toString()}`;
+    if (seenHLine.has(dedupKey)) continue;
+    seenHLine.add(dedupKey);
+
+    const groupKey = `${sx},${sxw}`;
+    const group = hLineGroups.get(groupKey) ?? [];
+    group.push(line);
+    hLineGroups.set(groupKey, group);
+  }
+
+  // Phase 1: exact x-range pairs — column H-lines at matching extents form cells.
+  for (const group of hLineGroups.values()) {
+    if (group.length < 2) continue;
+    group.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < group.length; i++) {
+      const bottom = group[i - 1];
+      const top = group[i];
+      if (bottom === undefined || top === undefined) continue;
+      const h = top.y - bottom.y;
+      // Skip near-zero gaps (duplicate lines) and excessively tall spans.
+      if (h < MIN_VISIBLE_HEIGHT) continue;
+      if (h > MAX_FIELD_HEIGHT * 2) continue;
+      evaluateBox({ x: bottom.x, y: bottom.y, w: bottom.w, h }, textBlocks, pageWidth, candidates);
+    }
+  }
+
+  // Phase 2: container pairing — handle the case where the top boundary of the
+  // uppermost row in a section is a wide section-header bar (different x-extent than
+  // the column H-lines).  For each group's topmost H-line that has no same-extent
+  // partner ABOVE it, look for a wider H-line that covers ≥ 80% of this line's
+  // x-range AND is at least CONTAINMENT_WIDTH_RATIO times wider.  Use the column
+  // line's own extent for the resulting cell so the field width matches the column.
+  //
+  // All unique H-lines for the containment search.
+  const allUniqueLines: { x: number; y: number; w: number }[] = [];
+  for (const group of hLineGroups.values()) {
+    allUniqueLines.push(...group);
+  }
+
+  for (const group of hLineGroups.values()) {
+    // Find the topmost H-line in this group (highest y) — it is the bottom boundary
+    // of the top row in this column and may have no exact-match partner above it.
+    const sorted = [...group].sort((a, b) => a.y - b.y);
+    const topLine = sorted.at(-1);
+    if (topLine === undefined) continue; // empty group — impossible but satisfies TS;
+
+    // Look for a wider "container" H-line above topLine.
+    for (const other of allUniqueLines) {
+      // Must be above topLine (higher y) and within a single-row height.
+      const h = other.y - topLine.y;
+      if (h < MIN_VISIBLE_HEIGHT || h > MAX_FIELD_HEIGHT) continue;
+
+      // "other" must be significantly wider (section divider, not a column line).
+      if (other.w < topLine.w * CONTAINMENT_WIDTH_RATIO) continue;
+
+      // "other" must span at least 80% of the column line's x-range.
+      const overlapStart = Math.max(topLine.x, other.x);
+      const overlapEnd = Math.min(topLine.x + topLine.w, other.x + other.w);
+      const overlapW = overlapEnd - overlapStart;
+      if (overlapW < topLine.w * 0.8) continue;
+
+      evaluateBox(
+        { x: topLine.x, y: topLine.y, w: topLine.w, h },
+        textBlocks,
+        pageWidth,
+        candidates,
+      );
+    }
+  }
+
+  // Phase 2b: mirror of Phase 2 — for each group's BOTTOMMOST H-line that has no
+  // same-extent partner below it, look for a wider container BELOW.  Handles rows
+  // where the bottom boundary is a wide section-divider bar rather than a column line.
+  for (const group of hLineGroups.values()) {
+    const sorted = [...group].sort((a, b) => a.y - b.y);
+    const bottomLine = sorted[0];
+    if (bottomLine === undefined) continue;
+
+    for (const other of allUniqueLines) {
+      // Must be below bottomLine (lower y) and within a single-row height.
+      const h = bottomLine.y - other.y;
+      if (h < MIN_VISIBLE_HEIGHT || h > MAX_FIELD_HEIGHT) continue;
+
+      // "other" must be significantly wider (section divider, not a column line).
+      if (other.w < bottomLine.w * CONTAINMENT_WIDTH_RATIO) continue;
+
+      // "other" must span at least 80% of the column line's x-range.
+      const overlapStart = Math.max(bottomLine.x, other.x);
+      const overlapEnd = Math.min(bottomLine.x + bottomLine.w, other.x + other.w);
+      const overlapW = overlapEnd - overlapStart;
+      if (overlapW < bottomLine.w * 0.8) continue;
+
+      evaluateBox(
+        { x: bottomLine.x, y: other.y, w: bottomLine.w, h },
+        textBlocks,
+        pageWidth,
+        candidates,
+      );
     }
   }
 
@@ -1005,8 +1310,9 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
             width,
           );
         }
-      } catch {
+      } catch (err) {
         // best-effort — leave pageType/textBlocks/candidateFields at defaults
+        process.stderr.write(`[fpdf] analyzePdf page ${p.toString()} error: ${String(err)}\n`);
       }
     }
 

@@ -72,6 +72,14 @@ describe('CLI program structure', () => {
     expect(opt).toBeDefined();
   });
 
+  it('fill command has --fresh flag defaulting to false', () => {
+    const program = buildProgram();
+    const fill = program.commands.find((c) => c.name() === 'fill');
+    const opt = fill?.options.find((o) => o.long === '--fresh');
+    expect(opt).toBeDefined();
+    expect(opt?.defaultValue).toBe(false);
+  });
+
   it('has four top-level commands and no more', () => {
     const program = buildProgram();
     expect(program.commands).toHaveLength(4);
@@ -273,6 +281,43 @@ describe('CLI program structure', () => {
 
       expect(analyzePdf).not.toHaveBeenCalled();
       expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Resumed session'));
+      expect(startServer).toHaveBeenCalled();
+
+      stdoutSpy.mockRestore();
+    });
+
+    it('re-analyzes and overwrites the session when --fresh is passed', async () => {
+      const { startServer } = await import('../server.js');
+      const { analyzePdf } = await import('../analyzer.js');
+      const { readFile } = await import('node:fs/promises');
+      const freshDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:fresh',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      };
+      // readFile would succeed (existing json) but --fresh should skip it entirely
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(freshDoc) as never);
+      vi.mocked(analyzePdf).mockResolvedValue(freshDoc);
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf', '--fresh']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(analyzePdf).toHaveBeenCalled();
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Fresh analysis'));
       expect(startServer).toHaveBeenCalled();
 
       stdoutSpy.mockRestore();

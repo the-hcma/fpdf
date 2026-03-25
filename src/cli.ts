@@ -79,7 +79,8 @@ export function buildProgram(): Command {
     .description('Analyze a PDF and start a local fill session in the browser')
     .option('--open', 'Automatically open the URL in the default browser', false)
     .option('--json <path>', 'Resume from an existing .fpdf.json session file')
-    .action((file: string, opts: { open: boolean; json?: string }) => {
+    .option('--fresh', 'Ignore any existing .fpdf.json and re-analyze the PDF from scratch', false)
+    .action((file: string, opts: { open: boolean; json?: string; fresh: boolean }) => {
       const run = async (): Promise<void> => {
         const pdfPath = path.resolve(file);
         const defaultJsonPath = path.join(
@@ -94,6 +95,11 @@ export function buildProgram(): Command {
           const raw = await readFile(jsonPath, 'utf-8');
           doc = JSON.parse(raw) as FpdfDocument;
           logger.info(`Resumed session from ${jsonPath}`);
+        } else if (opts.fresh) {
+          // --fresh: skip any existing session and re-analyze unconditionally.
+          doc = await analyzePdf(pdfPath);
+          await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
+          logger.info(`Fresh analysis of ${pdfPath} → ${jsonPath}`);
         } else {
           // Auto-detect: load the default .fpdf.json if it exists, otherwise analyze.
           let raw: string | null = null;
@@ -259,6 +265,20 @@ export function buildProgram(): Command {
         process.exit(1);
       });
     });
+
+  // Append per-command option tables to the top-level --help output so users
+  // don't need to discover options by running `fpdf <command> --help`.
+  program.addHelpText('after', () => {
+    const sections: string[] = [];
+    for (const cmd of program.commands) {
+      const opts = cmd.options.filter((o) => o.long !== '--help');
+      if (opts.length === 0) continue;
+      const COL = 28;
+      const lines = opts.map((o) => `  ${o.flags.padEnd(COL)}${o.description}`);
+      sections.push(`\n${cmd.name()} options:\n${lines.join('\n')}`);
+    }
+    return sections.join('\n');
+  });
 
   return program;
 }

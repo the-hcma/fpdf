@@ -9,7 +9,7 @@ import {
   PDFName,
   PDFDict,
 } from 'pdf-lib';
-import type { FpdfDocument } from './types.js';
+import type { FpdfDocument, PdfKind } from './types.js';
 import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from './analyzer.js';
 
 /**
@@ -69,9 +69,18 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
   const bytes = await readFile(pdfPath);
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
 
-  // Check for XFA BEFORE calling getForm() — pdf-lib deletes /AcroForm/XFA
-  // when getForm() is called, so we must check and patch first.
-  const xfaInfo = getXfaDatasetsInfo(pdfDoc);
+  // Determine XFA branch using the stored pdfKind when available (new .fpdf.json).
+  // Fall back to runtime detection for old files that predate the pdfKind field.
+  const storedKind = doc.metadata.pdfKind;
+  const isXfaKind: boolean | null =
+    storedKind === undefined
+      ? null // unknown: detect at runtime below
+      : storedKind === 'xfa-hybrid' || storedKind === 'pure-xfa';
+
+  // Only call getXfaDatasetsInfo when we don't already know it's non-XFA.
+  // Must happen BEFORE getForm() — pdf-lib deletes /AcroForm/XFA on getForm().
+  const xfaInfo = isXfaKind === false ? null : getXfaDatasetsInfo(pdfDoc);
+  const isXfa = isXfaKind ?? xfaInfo !== null;
 
   const allValues = new Map<string, string | boolean>();
   for (const page of doc.pages) {
@@ -80,7 +89,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     }
   }
 
-  if (xfaInfo !== null) {
+  if (isXfa && xfaInfo !== null) {
     // ── XFA hybrid PDF ───────────────────────────────────────────────────────
     //
     // Step 1: Patch the XFA datasets stream in-memory.
@@ -94,7 +103,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     const xfaValue = acroForm instanceof PDFDict ? acroForm.get(PDFName.of('XFA')) : undefined;
 
     // Step 3: Fill AcroForm widget values (getForm() strips /XFA internally).
-    writeAcroFormValues(pdfDoc, allValues, /* isXfa */ true);
+    writeAcroFormValues(pdfDoc, allValues, 'xfa-hybrid');
 
     // Step 4: Generate widget appearances now that /XFA is already absent from
     // the in-memory dict — a second deleteXFA() call inside updateFieldAppearances
@@ -111,7 +120,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     return pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false });
   } else {
     // ── Pure AcroForm PDF ─────────────────────────────────────────────────────
-    writeAcroFormValues(pdfDoc, allValues, /* isXfa */ false);
+    writeAcroFormValues(pdfDoc, allValues, 'acroform');
   }
 
   return pdfDoc.save();
@@ -120,16 +129,16 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
 /**
  * Write field values into the AcroForm widgets of `pdfDoc`.
  *
- * @param isXfa  When true the PDF is an XFA hybrid.  Radio buttons in XFA
- *   hybrid PDFs store on-values ('0', '1', …) rather than option names
- *   ('Yes', 'No', …).  PDFRadioGroup.select() only accepts option names, so
- *   we translate via the widget on-value array: stored value → index in
- *   getOnValues() → option name at that index in getOptions().
+ * @param pdfKind  Document-level PDF kind.  Radio buttons in XFA hybrid PDFs
+ *   store on-values ('0', '1', …) rather than option names ('Yes', 'No', …).
+ *   PDFRadioGroup.select() only accepts option names, so we translate via the
+ *   widget on-value array: stored value → index in getOnValues() → option name
+ *   at that index in getOptions().
  */
 function writeAcroFormValues(
   pdfDoc: PDFDocument,
   values: Map<string, string | boolean>,
-  isXfa: boolean,
+  pdfKind: PdfKind,
 ): void {
   const form = pdfDoc.getForm();
   for (const [name, value] of values) {
@@ -153,7 +162,7 @@ function writeAcroFormValues(
       } else if (pdfField instanceof PDFRadioGroup) {
         if (typeof value !== 'string' || value === '') continue;
 
-        if (isXfa) {
+        if (pdfKind === 'xfa-hybrid' || pdfKind === 'pure-xfa') {
           // XFA hybrid radio groups store on-values (e.g. '0', '1') in the
           // fpdf.json, but PDFRadioGroup.select() expects the /Opt option name
           // (e.g. 'Yes', 'No').  Translate via index: find the position of

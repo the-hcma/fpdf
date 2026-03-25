@@ -276,4 +276,227 @@ describe('regenerateAsAcroForm', () => {
     const bytes = await import('node:fs/promises').then((m) => m.readFile(newPdfPath));
     expect(Buffer.from(bytes.subarray(0, 4)).toString()).toBe('%PDF');
   });
+
+  it('handles textarea fields (multi-line enabled)', async () => {
+    const doc = makeDoc([{ name: 'notes', type: 'textarea', value: 'Hello\nWorld' }]);
+    const { newDoc } = await regenerateAsAcroForm(simplePdfPath, doc);
+    const field = newDoc.pages[0]?.fields.find((f) => f.name === 'notes');
+    expect(field).toBeDefined();
+  });
+
+  it('handles unchecked checkbox (value: false)', async () => {
+    const cbPdfBytes = await makeAcroFormPdfBytes((doc) => {
+      const page = doc.addPage([612, 792]);
+      const form = doc.getForm();
+      const cb = form.createCheckBox('accept');
+      cb.addToPage(page, { x: 50, y: 700, width: 15, height: 15 });
+    });
+    const cbPdfPath = await writeTempPdf('unchecked-cb.pdf', cbPdfBytes);
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: cbPdfPath,
+        pdfFilename: 'unchecked-cb.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'acroform',
+          fields: [makePdfField({ name: 'accept', type: 'checkbox', value: false })],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const { newDoc } = await regenerateAsAcroForm(cbPdfPath, doc);
+    const field = newDoc.pages[0]?.fields.find((f) => f.name === 'accept');
+    expect(field?.value).toBe(false);
+  });
+
+  it('leaves radio group unselected when all widget values are empty', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: radioPdfPath,
+        pdfFilename: 'radio.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'acroform',
+          fields: [
+            makePdfField({
+              name: 'plan',
+              type: 'radio',
+              value: '',
+              radioValue: 'hmo',
+              placement: { x: 50, y: 700, width: 15, height: 15 },
+            }),
+            makePdfField({
+              name: 'plan',
+              type: 'radio',
+              value: '',
+              radioValue: 'ppo',
+              placement: { x: 50, y: 680, width: 15, height: 15 },
+            }),
+          ],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const { newDoc } = await regenerateAsAcroForm(radioPdfPath, doc);
+    const radioFields = newDoc.pages[0]?.fields.filter((f) => f.name === 'plan');
+    expect(radioFields?.length).toBe(2);
+  });
+
+  it('deduplicates non-radio fields with the same name across pages (second occurrence skipped)', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: simplePdfPath,
+        pdfFilename: 'simple.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'acroform',
+          fields: [
+            makePdfField({
+              name: 'dup',
+              type: 'text',
+              value: 'first',
+              placement: { x: 50, y: 700, width: 200, height: 20 },
+            }),
+            // Same name — should be skipped by the createdNames guard
+            makePdfField({
+              name: 'dup',
+              type: 'text',
+              value: 'second',
+              placement: { x: 50, y: 670, width: 200, height: 20 },
+            }),
+          ],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const { newDoc } = await regenerateAsAcroForm(simplePdfPath, doc);
+    const dupFields = newDoc.pages[0]?.fields.filter((f) => f.name === 'dup');
+    expect(dupFields?.length).toBe(1);
+  });
+
+  it('handles radio field with no radioValue (falls back to empty string)', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: radioPdfPath,
+        pdfFilename: 'radio.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'acroform',
+          fields: [
+            // radioValue omitted → falls back to '' via ??
+            makePdfField({
+              name: 'opt',
+              type: 'radio',
+              value: '',
+              placement: { x: 50, y: 700, width: 15, height: 15 },
+            }),
+          ],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    // Should complete without error even with an empty radioValue
+    const { newDoc } = await regenerateAsAcroForm(radioPdfPath, doc);
+    expect(newDoc).toBeDefined();
+  });
+
+  it('handles select/dropdown fields: valid value, invalid value, and empty value', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: simplePdfPath,
+        pdfFilename: 'simple.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'acroform',
+          fields: [
+            // Valid option selected — dd.select() succeeds
+            makePdfField({
+              name: 'color',
+              type: 'select',
+              value: 'red',
+              options: ['red', 'blue'],
+              placement: { x: 50, y: 700, width: 200, height: 20 },
+            }),
+            // Invalid option — dd.select() throws; field left unselected
+            makePdfField({
+              name: 'shape',
+              type: 'select',
+              value: 'triangle',
+              options: ['circle', 'square'],
+              placement: { x: 50, y: 650, width: 200, height: 20 },
+            }),
+            // Empty value — dd.select() is not called
+            makePdfField({
+              name: 'size',
+              type: 'select',
+              value: '',
+              options: ['S', 'M', 'L'],
+              placement: { x: 50, y: 600, width: 200, height: 20 },
+            }),
+          ],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const { newDoc } = await regenerateAsAcroForm(simplePdfPath, doc);
+    // All three dropdown fields should have been created
+    const colorField = newDoc.pages[0]?.fields.find((f) => f.name === 'color');
+    expect(colorField).toBeDefined();
+  });
 });

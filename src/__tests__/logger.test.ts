@@ -91,6 +91,13 @@ describe('installWarnFilter', () => {
     console.warn('some other warning');
     expect(warnSpy).toHaveBeenCalledWith('some other warning');
   });
+
+  it('passes through console.warn called with no arguments', () => {
+    installWarnFilter();
+    // eslint-disable-next-line no-console
+    console.warn();
+    expect(warnSpy).toHaveBeenCalledWith();
+  });
 });
 
 describe('withSilencedWarn', () => {

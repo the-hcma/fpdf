@@ -146,6 +146,14 @@ describe('startServer', () => {
     });
   });
 
+  describe('GET /unknown-path (SPA catch-all)', () => {
+    it('returns 200 with text/html for an unknown path not served by static middleware', async () => {
+      const res = await fetch(`${baseUrl}/this-path-does-not-exist-in-public`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/html');
+    });
+  });
+
   describe('GET / (UI fallback)', () => {
     it('returns 200 with content-type text/html', async () => {
       const res = await fetch(baseUrl);
@@ -253,6 +261,38 @@ describe('startServer', () => {
       const res = await fetch(`${baseUrl}/doc`);
       const body = (await res.json()) as FpdfDocument;
       expect(body.pages[0]?.fields[0]?.value).toBe('Alice');
+    });
+  });
+
+  describe('POST /regenerate-acroform', () => {
+    it('returns { ok: true } and updates the doc when regeneration succeeds', async () => {
+      // Use an isolated server so path changes don't affect other tests
+      const dir = path.join(tmpdir(), 'fpdf-server-regen-success');
+      await mkdir(dir, { recursive: true });
+      const pdfDoc2 = await PDFDocument.create();
+      const p = pdfDoc2.addPage([612, 792]);
+      const form = pdfDoc2.getForm();
+      const tf = form.createTextField('field1');
+      tf.addToPage(p, { x: 50, y: 700, width: 200, height: 20 });
+      const pdfFile = path.join(dir, 'regen.pdf');
+      const jsonFile = path.join(dir, 'regen.fpdf.json');
+      await writeFile(pdfFile, await pdfDoc2.save());
+
+      const regenDoc: FpdfDocument = {
+        ...MOCK_DOC,
+        metadata: { ...MOCK_DOC.metadata, originalPdf: pdfFile, pdfFilename: 'regen.pdf' },
+      };
+      await writeFile(jsonFile, JSON.stringify(regenDoc, null, 2), 'utf-8');
+
+      const h = await startServer({ pdfPath: pdfFile, doc: regenDoc, jsonPath: jsonFile });
+      try {
+        const res = await fetch(`${h.url}/regenerate-acroform`, { method: 'POST' });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { ok: boolean };
+        expect(body.ok).toBe(true);
+      } finally {
+        await h.close();
+      }
     });
   });
 
@@ -495,6 +535,25 @@ describe('startServer error paths', () => {
       const res = await fetch(h.url);
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toContain('text/html');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('POST /regenerate-acroform returns 500 when regeneration fails', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-server-regen-error');
+    await mkdir(dir, { recursive: true });
+    // Point to a missing PDF so regenerateAsAcroForm throws on readFile
+    const missingPdf = path.join(dir, 'missing.pdf');
+    const tmpJson = path.join(dir, 'test.fpdf.json');
+    await writeFile(tmpJson, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath: missingPdf, doc: MOCK_DOC, jsonPath: tmpJson });
+    try {
+      const res = await fetch(`${h.url}/regenerate-acroform`, { method: 'POST' });
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toBeTruthy();
     } finally {
       await h.close();
     }

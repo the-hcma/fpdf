@@ -10,6 +10,14 @@ vi.mock('../analyzer.js', () => ({
       this.name = 'AnalyzerError';
     }
   },
+  getXfaDatasetsInfo: vi.fn(),
+  patchXfaDatasetsXml: vi.fn(),
+}));
+
+vi.mock('pdf-lib', () => ({
+  PDFDocument: {
+    load: vi.fn().mockResolvedValue({}),
+  },
 }));
 
 vi.mock('../server.js', () => ({
@@ -160,6 +168,20 @@ describe('CLI program structure', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(errorSpy).toHaveBeenCalledWith('pdf locked');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('logs a stringified non-Error value when export rejects with a non-Error', async () => {
+      const { exportPdf } = await import('../exporter.js');
+      const { readFile } = await import('node:fs/promises');
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(exportPdf).mockRejectedValue('disk full');
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'export', 'form.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('disk full');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });
@@ -514,6 +536,108 @@ describe('CLI program structure', () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('port in use'));
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
+
+    it('migrates and re-analyzes when the loaded JSON has a legacy radio field with boolean value', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const { readFile } = await import('node:fs/promises');
+
+      // Legacy doc:
+      //  - radio field without radioValue → triggers needsRadioMigration via !('radioValue' in f)
+      //  - radio field WITH radioValue but boolean value → triggers via typeof value === 'boolean'
+      //  - text field with a saved value → exercises the migrateDoc value-copy path
+      const legacyDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:old',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform',
+            fields: [
+              { id: 'r1', name: 'choice', type: 'radio', value: true, radioValue: 'yes' },
+              { id: 't1', name: 'firstName', type: 'text', value: 'Alice' },
+            ],
+            candidateFields: [],
+            textBlocks: [],
+          },
+        ],
+      };
+      const freshDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:fresh',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform',
+            fields: [
+              // firstName is in saved (value 'Alice') → v !== undefined → TRUE branch
+              {
+                id: 'f1',
+                name: 'firstName',
+                type: 'text',
+                label: 'First Name',
+                displayName: 'First Name',
+                placement: { x: 50, y: 700, width: 150, height: 14 },
+                value: '',
+                required: false,
+                readOnly: false,
+                options: [],
+              },
+              // lastName is NOT in saved → v === undefined → FALSE branch of v !== undefined
+              {
+                id: 'f2',
+                name: 'lastName',
+                type: 'text',
+                label: 'Last Name',
+                displayName: 'Last Name',
+                placement: { x: 50, y: 680, width: 150, height: 14 },
+                value: '',
+                required: false,
+                readOnly: false,
+                options: [],
+              },
+            ],
+            candidateFields: [],
+            textBlocks: [],
+          },
+        ],
+      };
+
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(legacyDoc) as never);
+      vi.mocked(analyzePdf).mockResolvedValue(freshDoc as never);
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(analyzePdf).toHaveBeenCalled();
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Migrating'));
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Migration complete'));
+      stdoutSpy.mockRestore();
+    });
   });
 
   describe('analyze command action', () => {
@@ -678,5 +802,162 @@ describe('CLI program structure', () => {
       expect(errorSpy).toHaveBeenCalledWith('file not found');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
+  });
+
+  describe('debug-export command action', () => {
+    let errorSpy: MockInstance;
+    let exitSpy: MockInstance;
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      errorSpy = vi.spyOn(logger, 'error').mockReturnValue(undefined);
+      exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation((_code?: string | number | null) => undefined as never);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('prints radio and checkbox field info and reports no XFA when xfaInfo is null', async () => {
+      const { getXfaDatasetsInfo } = await import('../analyzer.js');
+      const { readFile } = await import('node:fs/promises');
+      const { PDFDocument } = await import('pdf-lib');
+
+      const docWithFields = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform',
+            fields: [
+              { id: 'r1', name: 'plan', type: 'radio', value: 'hmo', radioValue: 'hmo' },
+              { id: 'c1', name: 'agree', type: 'checkbox', value: true },
+              { id: 't1', name: 'name', type: 'text', value: 'Alice' },
+            ],
+            candidateFields: [],
+            textBlocks: [],
+          },
+        ],
+      };
+
+      vi.mocked(readFile)
+        .mockResolvedValueOnce(JSON.stringify(docWithFields) as never)
+        .mockResolvedValueOnce(Buffer.from('%PDF-1.4') as never);
+      (PDFDocument as unknown as { load: ReturnType<typeof vi.fn> }).load.mockResolvedValue(
+        {} as never,
+      );
+      vi.mocked(getXfaDatasetsInfo).mockReturnValue(null);
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'debug-export', 'form.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('name=plan'));
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('name=agree'));
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('No XFA datasets found'));
+      stdoutSpy.mockRestore();
+    });
+
+    it('prints XFA datasets XML before and after patching', async () => {
+      const { getXfaDatasetsInfo, patchXfaDatasetsXml } = await import('../analyzer.js');
+      const { readFile } = await import('node:fs/promises');
+      const { PDFDocument } = await import('pdf-lib');
+
+      const simpleDoc = {
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [
+          {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform',
+            fields: [{ id: 't1', name: 'firstName', type: 'text', value: 'Bob' }],
+            candidateFields: [],
+            textBlocks: [],
+          },
+        ],
+      };
+
+      vi.mocked(readFile)
+        .mockResolvedValueOnce(JSON.stringify(simpleDoc) as never)
+        .mockResolvedValueOnce(Buffer.from('%PDF-1.4') as never);
+      (PDFDocument as unknown as { load: ReturnType<typeof vi.fn> }).load.mockResolvedValue(
+        {} as never,
+      );
+      vi.mocked(getXfaDatasetsInfo).mockReturnValue({
+        ref: {} as never,
+        xml: '<datasets><firstName/></datasets>',
+      });
+      vi.mocked(patchXfaDatasetsXml).mockReturnValue(
+        '<datasets><firstName>Bob</firstName></datasets>',
+      );
+
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'debug-export', 'form.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('XFA datasets XML (initial)'));
+      expect(stdoutSpy).toHaveBeenCalledWith(expect.stringContaining('XFA datasets XML (patched)'));
+      stdoutSpy.mockRestore();
+    });
+
+    it('logs a stringified error and exits when debug-export fails', async () => {
+      const { readFile } = await import('node:fs/promises');
+      vi.mocked(readFile).mockRejectedValue('disk error');
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'debug-export', 'missing.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('disk error');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('logs an Error message and exits when debug-export throws an Error', async () => {
+      const { readFile } = await import('node:fs/promises');
+      vi.mocked(readFile).mockRejectedValue(new Error('file not found'));
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'debug-export', 'missing.fpdf.json']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('file not found');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  });
+
+  it('help output includes fill and export options sections', () => {
+    const program = buildProgram();
+    let helpOutput = '';
+    program.configureOutput({
+      writeOut: (str) => {
+        helpOutput += str;
+      },
+    });
+    program.outputHelp();
+    expect(helpOutput).toContain('fill options:');
+    expect(helpOutput).toContain('export options:');
   });
 });

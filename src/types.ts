@@ -18,6 +18,16 @@ export type FieldType = 'text' | 'textarea' | 'checkbox' | 'radio' | 'select';
  */
 export type PageType = 'acroform' | 'vector' | 'raster' | 'raster+ocr' | 'hybrid';
 
+/**
+ * Document-level classification of a PDF's form structure.
+ *
+ * acroform     — has AcroForm fields, no XFA datasets
+ * xfa-hybrid   — has AcroForm widgets AND XFA datasets (e.g. Cigna)
+ * pure-xfa     — XFA datasets only, no traditional AcroForm widgets
+ * no-acroform  — no AcroForm at all (pages are vector/raster/hybrid)
+ */
+export type PdfKind = 'acroform' | 'xfa-hybrid' | 'pure-xfa' | 'no-acroform';
+
 /** How likely a detected vector path candidate is a real form field. */
 export type CandidateFieldConfidence = 'high' | 'medium' | 'low';
 
@@ -140,6 +150,8 @@ export interface FpdfMetadata {
   createdAt: string;
   updatedAt: string;
   pageCount: number;
+  /** Document-level form structure classification. Added in schema v1.1. */
+  pdfKind?: PdfKind;
 }
 
 export interface FpdfDocument {

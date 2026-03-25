@@ -7,7 +7,7 @@ import { PDFDocument, PDFName, PDFString, PDFRawStream, PDFDict, PDFRef } from '
 import { deflateSync } from 'node:zlib';
 import { exportPdf } from '../exporter.js';
 import { getXfaDatasetsInfo } from '../analyzer.js';
-import type { FpdfDocument, PdfField } from '../types.js';
+import type { FpdfDocument, PdfField, PdfKind } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,7 +27,7 @@ async function writeTempPdf(name: string, bytes: Uint8Array): Promise<string> {
   return p;
 }
 
-function makeDoc(fields: Partial<PdfField>[]): FpdfDocument {
+function makeDoc(fields: Partial<PdfField>[], pdfKind: PdfKind = 'acroform'): FpdfDocument {
   return {
     metadata: {
       version: '1.0',
@@ -37,6 +37,7 @@ function makeDoc(fields: Partial<PdfField>[]): FpdfDocument {
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
       pageCount: 1,
+      pdfKind,
     },
     pages: [
       {
@@ -208,6 +209,24 @@ describe('exportPdf', () => {
     const bytes = await exportPdf(textPdfPath, doc);
     expect(Buffer.from(bytes.slice(0, 4)).toString()).toBe('%PDF');
   });
+
+  it('uses stored pdfKind acroform path without XFA re-detection', async () => {
+    const doc = makeDoc([{ name: 'firstName', type: 'text', value: 'KindTest' }], 'acroform');
+    doc.metadata.originalPdf = textPdfPath;
+    const bytes = await exportPdf(textPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getForm().getTextField('firstName').getText()).toBe('KindTest');
+  });
+
+  it('falls back to runtime XFA detection when pdfKind is absent (old file)', async () => {
+    const doc = makeDoc([{ name: 'firstName', type: 'text', value: 'Legacy' }]);
+    doc.metadata.originalPdf = textPdfPath;
+    // Simulate an old .fpdf.json without pdfKind
+    delete (doc.metadata as unknown as Record<string, unknown>).pdfKind;
+    const bytes = await exportPdf(textPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getForm().getTextField('firstName').getText()).toBe('Legacy');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -258,10 +277,13 @@ describe('exportPdf — XFA datasets patching', () => {
   });
 
   it('patches firstName and lastName in the XFA datasets XML', async () => {
-    const doc = makeDoc([
-      { name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Alice' },
-      { name: 'topmostSubform.Page1.lastName', type: 'text', value: 'Smith' },
-    ]);
+    const doc = makeDoc(
+      [
+        { name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Alice' },
+        { name: 'topmostSubform.Page1.lastName', type: 'text', value: 'Smith' },
+      ],
+      'xfa-hybrid',
+    );
 
     const bytes = await exportPdf(xfaPdfPath, doc);
     const result = await PDFDocument.load(bytes);
@@ -273,18 +295,27 @@ describe('exportPdf — XFA datasets patching', () => {
 
   it('exports successfully even when AcroForm has no matching fields', async () => {
     // XFA-only fields won't be found by form.getField(); export must still succeed
-    const doc = makeDoc([{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Bob' }]);
+    const doc = makeDoc(
+      [{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Bob' }],
+      'xfa-hybrid',
+    );
     await expect(exportPdf(xfaPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
   });
 
   it('returns a valid PDF when XFA datasets are patched', async () => {
-    const doc = makeDoc([{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Carol' }]);
+    const doc = makeDoc(
+      [{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'Carol' }],
+      'xfa-hybrid',
+    );
     const bytes = await exportPdf(xfaPdfPath, doc);
     expect(Buffer.from(bytes.slice(0, 4)).toString()).toBe('%PDF');
   });
 
   it('escapes XML special chars in field values', async () => {
-    const doc = makeDoc([{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'A & B' }]);
+    const doc = makeDoc(
+      [{ name: 'topmostSubform.Page1.firstName', type: 'text', value: 'A & B' }],
+      'xfa-hybrid',
+    );
     const bytes = await exportPdf(xfaPdfPath, doc);
     const result = await PDFDocument.load(bytes);
     const info = getXfaDatasetsInfo(result);
@@ -295,7 +326,10 @@ describe('exportPdf — XFA datasets patching', () => {
     // The fixture XML has <firstName/> and <lastName/> inside <topmostSubform>
     // but no <radio> element.  A field whose parent leaf is 'topmostSubform'
     // should be inserted there.
-    const doc = makeDoc([{ name: 'topmostSubform.radio', type: 'radio', value: '1' }]);
+    const doc = makeDoc(
+      [{ name: 'topmostSubform.radio', type: 'radio', value: '1' }],
+      'xfa-hybrid',
+    );
     const bytes = await exportPdf(xfaPdfPath, doc);
     const result = await PDFDocument.load(bytes);
     const info = getXfaDatasetsInfo(result);
@@ -309,7 +343,10 @@ describe('exportPdf — XFA datasets patching', () => {
     // first ancestor whose closing tag exists in the XML.
     // Here: 'topmostSubform.Page1.radio' — <Page1> is absent from the fixture XML,
     // so the fallback should walk up to <topmostSubform> and insert there.
-    const doc = makeDoc([{ name: 'topmostSubform.Page1.radio', type: 'radio', value: '1' }]);
+    const doc = makeDoc(
+      [{ name: 'topmostSubform.Page1.radio', type: 'radio', value: '1' }],
+      'xfa-hybrid',
+    );
     const bytes = await exportPdf(xfaPdfPath, doc);
     const result = await PDFDocument.load(bytes);
     const info = getXfaDatasetsInfo(result);
@@ -365,7 +402,7 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
   it('selects a radio option by matching the on-value index (isXfa=true path)', async () => {
     // In pdf-lib, option name == on-value; 'Yes' on-value is '/Yes'.
     // exportPdf with isXfa=true runs the PDFName translation path.
-    const doc = makeDoc([{ name: 'agree', type: 'radio', value: 'Yes' }]);
+    const doc = makeDoc([{ name: 'agree', type: 'radio', value: 'Yes' }], 'xfa-hybrid');
     const bytes = await exportPdf(xfaHybridRadioPdfPath, doc);
     const result = await PDFDocument.load(bytes);
     const selected = result.getForm().getRadioGroup('agree').getSelected();
@@ -375,13 +412,13 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
   it('falls back to direct select when on-value is not found; swallows the error if invalid', async () => {
     // Value '0' is not in the on-values ['/Yes', '/No'] → idx === -1 → fallback
     // pdfField.select('0') throws (not a valid option name) → caught silently.
-    const doc = makeDoc([{ name: 'agree', type: 'radio', value: '0' }]);
+    const doc = makeDoc([{ name: 'agree', type: 'radio', value: '0' }], 'xfa-hybrid');
     // Should not throw even though neither translation nor direct select succeeds
     await expect(exportPdf(xfaHybridRadioPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
   });
 
   it('skips an XFA radio field when value is an empty string', async () => {
-    const doc = makeDoc([{ name: 'agree', type: 'radio', value: '' }]);
+    const doc = makeDoc([{ name: 'agree', type: 'radio', value: '' }], 'xfa-hybrid');
     await expect(exportPdf(xfaHybridRadioPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
   });
 });

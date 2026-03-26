@@ -77,6 +77,8 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ## Commits, Stacking & Pull Requests
 
+> See [GRAPHITE.md](./GRAPHITE.md) for the full Graphite workflow reference (branch naming, stack creation, navigation, submission, troubleshooting, and advanced rebasing).
+
 - This project uses **Graphite** (`gt`) for branch stacking. All `gt` commands must be prefixed with `GRAPHITE_PROFILE=thehcma` (e.g. `GRAPHITE_PROFILE=thehcma gt submit`), or exported in the shell session before running any `gt` command.
 - All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
 - Never work directly on `main`. Always create a stack branch: `gt create -m "feat: description"`.

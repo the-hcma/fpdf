@@ -226,7 +226,155 @@ function positionElement(
   el.style.height = `${String(height * scale)}px`;
 }
 
-function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLElement {
+const MIN_FIELD_SIZE_PT = 8; // minimum width/height in PDF points when resizing
+
+/**
+ * Attach a move handle and 8 resize handles to a field wrapper.
+ * Handles are only visible when `body.edit-layout` is active (CSS-controlled).
+ * Works for both AcroForm (PdfField) and candidate fields — both share the same
+ * `placement` shape.
+ */
+function makeFieldInteractive(
+  wrapper: HTMLElement,
+  field: { placement: PdfField['placement'] },
+  page: PdfPage,
+  scale: number,
+  onMutate: () => void,
+): void {
+  // ── Move handle ──────────────────────────────────────────────────────────────
+  const moveHandle = document.createElement('div');
+  moveHandle.className = 'field-move-handle';
+  wrapper.prepend(moveHandle);
+
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let origPlacement = { ...field.placement };
+
+  moveHandle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    moveHandle.setPointerCapture(e.pointerId);
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    origPlacement = { ...field.placement };
+  });
+
+  moveHandle.addEventListener('pointermove', (e) => {
+    if (!moveHandle.hasPointerCapture(e.pointerId)) return;
+    // Use bounding rect to get the effective scale (canvas scale × CSS zoom).
+    const pageWrapper = wrapper.closest<HTMLElement>('.page-wrapper');
+    const effectiveScale = pageWrapper
+      ? pageWrapper.getBoundingClientRect().width / page.widthPt
+      : scale;
+    const dx = (e.clientX - dragStartX) / effectiveScale;
+    const dy = (e.clientY - dragStartY) / effectiveScale;
+    field.placement.x = origPlacement.x + dx;
+    field.placement.y = origPlacement.y - dy; // PDF y is from bottom
+    positionElement(wrapper, field, page, scale);
+  });
+
+  moveHandle.addEventListener('pointerup', () => {
+    onMutate();
+  });
+
+  // ── Resize handles ───────────────────────────────────────────────────────────
+  for (const dir of ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'] as const) {
+    const handle = document.createElement('div');
+    handle.className = 'field-resize-handle';
+    handle.dataset.dir = dir;
+    wrapper.appendChild(handle);
+    attachResize(handle, dir, field, page, scale, wrapper, onMutate);
+  }
+}
+
+type ResizeDir = 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'nw';
+
+function attachResize(
+  handle: HTMLElement,
+  dir: ResizeDir,
+  field: { placement: PdfField['placement'] },
+  page: PdfPage,
+  scale: number,
+  wrapper: HTMLElement,
+  onMutate: () => void,
+): void {
+  let dragStartX = 0;
+  let dragStartY = 0;
+  let origPlacement = { ...field.placement };
+
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    origPlacement = { ...field.placement };
+  });
+
+  handle.addEventListener('pointermove', (e) => {
+    if (!handle.hasPointerCapture(e.pointerId)) return;
+    const pageWrapper = wrapper.closest<HTMLElement>('.page-wrapper');
+    const effectiveScale = pageWrapper
+      ? pageWrapper.getBoundingClientRect().width / page.widthPt
+      : scale;
+    const dx = (e.clientX - dragStartX) / effectiveScale;
+    // dy: positive = moving down in screen = decreasing PDF y
+    const dy = (e.clientY - dragStartY) / effectiveScale;
+
+    let { x, y, width, height } = origPlacement;
+
+    // North edge: top moves up (dy < 0) → height increases, y unchanged
+    if (dir === 'n' || dir === 'ne' || dir === 'nw') {
+      height = Math.max(MIN_FIELD_SIZE_PT, origPlacement.height - dy);
+    }
+    // South edge: bottom moves down (dy > 0) → y decreases, height increases
+    if (dir === 's' || dir === 'se' || dir === 'sw') {
+      y = origPlacement.y - dy;
+      height = Math.max(MIN_FIELD_SIZE_PT, origPlacement.height + dy);
+      if (height === MIN_FIELD_SIZE_PT)
+        y = origPlacement.y + origPlacement.height - MIN_FIELD_SIZE_PT;
+    }
+    // East edge: right moves right (dx > 0) → width increases, x unchanged
+    if (dir === 'e' || dir === 'ne' || dir === 'se') {
+      width = Math.max(MIN_FIELD_SIZE_PT, origPlacement.width + dx);
+    }
+    // West edge: left moves left (dx < 0) → x decreases, width increases
+    if (dir === 'w' || dir === 'nw' || dir === 'sw') {
+      x = origPlacement.x + dx;
+      width = Math.max(MIN_FIELD_SIZE_PT, origPlacement.width - dx);
+      if (width === MIN_FIELD_SIZE_PT)
+        x = origPlacement.x + origPlacement.width - MIN_FIELD_SIZE_PT;
+    }
+
+    field.placement.x = x;
+    field.placement.y = y;
+    field.placement.width = width;
+    field.placement.height = height;
+    positionElement(wrapper, field, page, scale);
+  });
+
+  handle.addEventListener('pointerup', () => {
+    onMutate();
+  });
+}
+
+function initEditLayout(): void {
+  const btn = document.getElementById('edit-layout');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    document.body.classList.toggle('edit-layout');
+    btn.textContent = document.body.classList.contains('edit-layout')
+      ? 'Done editing'
+      : 'Edit layout';
+  });
+}
+
+function buildFieldElement(
+  field: PdfField,
+  page: PdfPage,
+  scale: number,
+  onDirty: () => void,
+): HTMLElement {
   let el: HTMLElement;
 
   switch (field.type) {
@@ -304,6 +452,7 @@ function buildFieldElement(field: PdfField, page: PdfPage, scale: number): HTMLE
     wrapper.appendChild(marker);
   }
 
+  makeFieldInteractive(wrapper, field, page, scale, onDirty);
   wrapper.appendChild(el);
   return wrapper;
 }
@@ -312,6 +461,7 @@ function buildCandidateFieldElement(
   field: CandidateField,
   page: PdfPage,
   scale: number,
+  onDirty: () => void,
 ): HTMLElement {
   let el: HTMLElement;
   switch (field.type) {
@@ -353,6 +503,7 @@ function buildCandidateFieldElement(
   const wrapper = document.createElement('div');
   wrapper.className = 'field-wrapper';
   positionElement(wrapper, field, page, scale);
+  makeFieldInteractive(wrapper, field, page, scale, onDirty);
   wrapper.appendChild(el);
   return wrapper;
 }
@@ -363,6 +514,7 @@ async function renderPage(
   pdfPage: pdfjsLib.PDFPageProxy,
   docPage: PdfPage,
   container: HTMLElement,
+  onDirty: () => void,
 ): Promise<void> {
   const viewport = pdfPage.getViewport({ scale: window.devicePixelRatio > 1 ? 1.5 : 1 });
 
@@ -383,7 +535,7 @@ async function renderPage(
   const scale = viewport.width / docPage.widthPt;
   for (const field of docPage.fields) {
     if (field.readOnly) continue;
-    const fieldWrapper = buildFieldElement(field, docPage, scale);
+    const fieldWrapper = buildFieldElement(field, docPage, scale, onDirty);
     overlay.appendChild(fieldWrapper);
     // Fit font for pre-filled values once the element is in the DOM.
     const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
@@ -391,7 +543,7 @@ async function renderPage(
   }
   for (const field of docPage.candidateFields) {
     if (field.dismissed || field.confidence === 'low') continue;
-    const fieldWrapper = buildCandidateFieldElement(field, docPage, scale);
+    const fieldWrapper = buildCandidateFieldElement(field, docPage, scale, onDirty);
     overlay.appendChild(fieldWrapper);
     const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
     if (inputEl) fitFontToBox(inputEl);
@@ -609,6 +761,7 @@ async function main(): Promise<void> {
   });
   initToggle();
   initZoom();
+  initEditLayout();
   setStatus('Loading…');
 
   let baseText = '';
@@ -654,11 +807,34 @@ async function main(): Promise<void> {
   const pagesContainer = document.getElementById('pages');
   if (!pagesContainer) throw new Error('Missing #pages element');
 
+  // Build field maps early so they're available to drag/resize handlers during rendering.
+  const fieldById = new Map<string, PdfField>();
+  for (const page of fpdfDoc.pages) {
+    for (const field of page.fields) fieldById.set(field.id, field);
+  }
+  const candidateById = new Map<string, CandidateField>();
+  for (const page of fpdfDoc.pages) {
+    for (const field of page.candidateFields) candidateById.set(field.id, field);
+  }
+
+  // Hoist debouncedSave and onDirty before renderPage so layout-drag mutations
+  // can trigger saves the same way input changes do. Both capture `baseText` by
+  // reference — it will be populated before any user interaction fires the callback.
+  const debouncedSave = debounce(() => {
+    setStatus(`${baseText} · Saving…`);
+    sendSave(fpdfDoc);
+  }, 800);
+  const onDirty = (): void => {
+    setStatus(`${baseText} · Unsaved changes`);
+    setSaveButtonDirty(true);
+    debouncedSave();
+  };
+
   for (let i = 1; i <= pdfDoc.numPages; i++) {
     const pdfPage = await pdfDoc.getPage(i);
     const docPage = fpdfDoc.pages.find((p) => p.pageNumber === i);
     if (!docPage) continue;
-    await renderPage(pdfPage, docPage, pagesContainer);
+    await renderPage(pdfPage, docPage, pagesContainer, onDirty);
   }
 
   initTabOrder(fpdfDoc, pagesContainer);
@@ -779,35 +955,7 @@ async function main(): Promise<void> {
     }
   }
 
-  const fieldById = new Map<string, PdfField>();
-  for (const page of fpdfDoc.pages) {
-    for (const field of page.fields) {
-      fieldById.set(field.id, field);
-    }
-  }
-
-  const candidateById = new Map<string, CandidateField>();
-  for (const page of fpdfDoc.pages) {
-    for (const field of page.candidateFields) {
-      candidateById.set(field.id, field);
-    }
-  }
-
-  const debouncedSave = debounce(() => {
-    setStatus(`${baseText} · Saving…`);
-    sendSave(fpdfDoc);
-  }, 800);
-
-  watchInputs(
-    pagesContainer,
-    fieldById,
-    () => {
-      setStatus(`${baseText} · Unsaved changes`);
-      setSaveButtonDirty(true);
-      debouncedSave();
-    },
-    candidateById,
-  );
+  watchInputs(pagesContainer, fieldById, onDirty, candidateById);
 
   const saveBtn = document.getElementById('save');
   saveBtn?.addEventListener('click', () => {

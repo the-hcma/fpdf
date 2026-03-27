@@ -228,6 +228,258 @@ function positionElement(
 
 const MIN_FIELD_SIZE_PT = 8; // minimum width/height in PDF points when resizing
 
+// ── Edit-layout selection ─────────────────────────────────────────────────────
+
+let editSelectedWrapper: HTMLElement | null = null;
+const editDeleteCallbacks = new WeakMap<HTMLElement, () => void>();
+
+function editSelectField(wrapper: HTMLElement | null): void {
+  if (editSelectedWrapper) editSelectedWrapper.classList.remove('field-selected');
+  editSelectedWrapper = wrapper;
+  if (wrapper) {
+    wrapper.classList.add('field-selected');
+    document.body.classList.add('edit-layout');
+  } else {
+    document.body.classList.remove('edit-layout');
+  }
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+
+const tooltipEl = document.createElement('div');
+tooltipEl.className = 'field-tooltip';
+document.body.appendChild(tooltipEl);
+let tooltipTimer = 0;
+let tooltipMouseX = 0;
+let tooltipMouseY = 0;
+
+function showTooltip(text: string, x: number, y: number): void {
+  tooltipEl.textContent = text;
+  tooltipEl.style.left = `${String(x + 14)}px`;
+  tooltipEl.style.top = `${String(y + 14)}px`;
+  tooltipEl.style.display = 'block';
+}
+
+function hideTooltip(): void {
+  clearTimeout(tooltipTimer);
+  tooltipEl.style.display = 'none';
+}
+
+// ── Context menu ──────────────────────────────────────────────────────────────
+
+type MenuItem =
+  | { label: string; action: () => void; submenu?: never }
+  | { label: string; submenu: { label: string; action: () => void }[]; action?: never };
+
+const contextMenuEl = document.createElement('div');
+contextMenuEl.className = 'field-context-menu';
+document.body.appendChild(contextMenuEl);
+
+const subMenuEl = document.createElement('div');
+subMenuEl.className = 'field-context-menu';
+document.body.appendChild(subMenuEl);
+
+function hideSubMenu(): void {
+  subMenuEl.style.display = 'none';
+  subMenuEl.innerHTML = '';
+}
+
+function showSubMenu(
+  items: { label: string; action: () => void }[],
+  triggerBtn: HTMLElement,
+): void {
+  subMenuEl.innerHTML = '';
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = item.label;
+    btn.addEventListener('click', () => {
+      hideContextMenu();
+      item.action();
+    });
+    subMenuEl.appendChild(btn);
+  }
+  // Measure off-screen then position flush with the right edge of the main menu.
+  subMenuEl.style.left = '-9999px';
+  subMenuEl.style.top = '-9999px';
+  subMenuEl.style.display = 'block';
+  const mainRect = contextMenuEl.getBoundingClientRect();
+  const btnRect = triggerBtn.getBoundingClientRect();
+  const subW = subMenuEl.offsetWidth;
+  const subH = subMenuEl.offsetHeight;
+  let left = mainRect.right;
+  let top = btnRect.top;
+  if (left + subW > window.innerWidth) left = mainRect.left - subW;
+  if (top + subH > window.innerHeight) top = window.innerHeight - subH - 4;
+  subMenuEl.style.left = `${String(left)}px`;
+  subMenuEl.style.top = `${String(top)}px`;
+}
+
+function showContextMenu(items: MenuItem[], x: number, y: number): void {
+  hideSubMenu();
+  contextMenuEl.innerHTML = '';
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = item.label;
+    if (item.submenu) {
+      const arrow = document.createElement('span');
+      arrow.className = 'submenu-arrow';
+      arrow.textContent = '▶';
+      arrow.setAttribute('aria-hidden', 'true');
+      btn.appendChild(arrow);
+      const sub = item.submenu;
+      btn.addEventListener('mouseenter', () => {
+        showSubMenu(sub, btn);
+      });
+    } else {
+      btn.addEventListener('mouseenter', () => {
+        hideSubMenu();
+      });
+      btn.addEventListener('click', () => {
+        hideContextMenu();
+        item.action();
+      });
+    }
+    contextMenuEl.appendChild(btn);
+  }
+  contextMenuEl.style.left = `${String(x)}px`;
+  contextMenuEl.style.top = `${String(y)}px`;
+  contextMenuEl.style.display = 'block';
+  // Hide submenu when mouse leaves the main menu (unless entering the submenu).
+  contextMenuEl.addEventListener(
+    'mouseleave',
+    (e) => {
+      if (!subMenuEl.contains(e.relatedTarget as Node)) hideSubMenu();
+    },
+    { once: true },
+  );
+}
+
+function hideContextMenu(): void {
+  hideSubMenu();
+  contextMenuEl.style.display = 'none';
+  contextMenuEl.innerHTML = '';
+}
+
+// ── Snap guide ────────────────────────────────────────────────────────────────
+
+/**
+ * Find the best horizontal snap for a field being moved.
+ * Compares the field's top and bottom edges against every other field's
+ * top and bottom edges on the same overlay.
+ * Returns the snapped top position (canvas-scale px) and the guide y position,
+ * or null if nothing is within threshold.
+ */
+function findYSnap(
+  wrapper: HTMLElement,
+  overlay: HTMLElement,
+  myTopPx: number,
+  myHeightPx: number,
+  thresholdPx: number,
+): { snappedTopPx: number; guidePx: number } | null {
+  const myBottomPx = myTopPx + myHeightPx;
+  let bestDist = thresholdPx;
+  let result: { snappedTopPx: number; guidePx: number } | null = null;
+
+  for (const other of Array.from(overlay.querySelectorAll<HTMLElement>('.field-wrapper'))) {
+    if (other === wrapper) continue;
+    const ot = parseFloat(other.style.top);
+    const ob = ot + parseFloat(other.style.height);
+
+    for (const guidePx of [ot, ob]) {
+      const d1 = Math.abs(myTopPx - guidePx);
+      if (d1 < bestDist) {
+        bestDist = d1;
+        result = { snappedTopPx: guidePx, guidePx };
+      }
+      const d2 = Math.abs(myBottomPx - guidePx);
+      if (d2 < bestDist) {
+        bestDist = d2;
+        result = { snappedTopPx: guidePx - myHeightPx, guidePx };
+      }
+    }
+  }
+
+  return result;
+}
+
+function showSnapGuide(overlay: HTMLElement, topPx: number): void {
+  let guide = overlay.querySelector<HTMLElement>('.snap-guide');
+  if (!guide) {
+    guide = document.createElement('div');
+    guide.className = 'snap-guide';
+    overlay.appendChild(guide);
+  }
+  guide.style.top = `${String(topPx)}px`;
+}
+
+function hideSnapGuide(overlay: HTMLElement): void {
+  overlay.querySelector('.snap-guide')?.remove();
+}
+
+// ── Field name editor ─────────────────────────────────────────────────────────
+
+function hideNameEditor(): void {
+  document.querySelector('.field-name-editor')?.remove();
+}
+
+function showNameEditor(
+  initialValue: string,
+  onConfirm: (name: string) => void,
+  x: number,
+  y: number,
+): void {
+  hideNameEditor();
+
+  const editor = document.createElement('div');
+  editor.className = 'field-name-editor';
+  editor.style.left = `${String(x)}px`;
+  editor.style.top = `${String(y)}px`;
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = initialValue;
+  input.placeholder = 'Field name';
+
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.textContent = 'Save';
+
+  function confirm(): void {
+    onConfirm(input.value.trim());
+    hideNameEditor();
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      confirm();
+    } else if (e.key === 'Escape') {
+      e.stopPropagation();
+      hideNameEditor();
+    }
+  });
+  saveBtn.addEventListener('click', confirm);
+
+  editor.append(input, saveBtn);
+  document.body.appendChild(editor);
+
+  // Close on outside click (deferred so this same event doesn't immediately dismiss)
+  window.setTimeout(() => {
+    function onOutside(ev: PointerEvent): void {
+      if (!editor.contains(ev.target as Node)) {
+        hideNameEditor();
+        document.removeEventListener('pointerdown', onOutside);
+      }
+    }
+    document.addEventListener('pointerdown', onOutside);
+  }, 0);
+
+  input.focus();
+  input.select();
+}
+
 /**
  * Attach a move handle and 8 resize handles to a field wrapper.
  * Handles are only visible when `body.edit-layout` is active (CSS-controlled).
@@ -240,7 +492,62 @@ function makeFieldInteractive(
   page: PdfPage,
   scale: number,
   onMutate: () => void,
+  onDelete?: () => void,
 ): void {
+  if (onDelete) editDeleteCallbacks.set(wrapper, onDelete);
+
+  // Enter edit mode on click when not already in edit mode (capture phase).
+  // Skip if this wrapper's input already has focus — user is typing, let clicks through normally.
+  wrapper.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (document.body.classList.contains('edit-layout')) return;
+      if (e.button !== 0) return;
+      // Never intercept clicks on radio/checkbox — let them toggle normally.
+      const target = e.target as HTMLElement;
+      if (
+        target instanceof HTMLInputElement &&
+        (target.type === 'radio' || target.type === 'checkbox')
+      )
+        return;
+      if (wrapper.contains(document.activeElement)) return;
+      e.stopPropagation();
+      e.preventDefault();
+      hideContextMenu();
+      hideNameEditor();
+      editSelectField(wrapper);
+    },
+    { capture: true },
+  );
+
+  wrapper.addEventListener('mouseenter', (e) => {
+    tooltipMouseX = e.clientX;
+    tooltipMouseY = e.clientY;
+    clearTimeout(tooltipTimer);
+    tooltipTimer = window.setTimeout(() => {
+      const inputEl = wrapper.querySelector<HTMLElement>('[data-field-id]');
+      const name = inputEl ? (inputEl.dataset.fieldName ?? '').trim() : '';
+      const inEdit = document.body.classList.contains('edit-layout');
+      const hints = onDelete
+        ? 'Drag: move · Corners: resize · Del: delete'
+        : 'Drag: move · Corners: resize';
+      let text = name;
+      if (inEdit) text = text ? `${text} · ${hints}` : hints;
+      if (text) showTooltip(text, tooltipMouseX, tooltipMouseY);
+    }, 600);
+  });
+  wrapper.addEventListener('mousemove', (e) => {
+    tooltipMouseX = e.clientX;
+    tooltipMouseY = e.clientY;
+    if (tooltipEl.style.display !== 'none') {
+      tooltipEl.style.left = `${String(e.clientX + 14)}px`;
+      tooltipEl.style.top = `${String(e.clientY + 14)}px`;
+    }
+  });
+  wrapper.addEventListener('mouseleave', () => {
+    hideTooltip();
+  });
+
   // ── Move handle ──────────────────────────────────────────────────────────────
   const moveHandle = document.createElement('div');
   moveHandle.className = 'field-move-handle';
@@ -248,19 +555,28 @@ function makeFieldInteractive(
 
   let dragStartX = 0;
   let dragStartY = 0;
+  let hasDragged = false;
+  let isCaptured = false;
   let origPlacement = { ...field.placement };
 
   moveHandle.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return; // ignore right-click and other non-primary buttons
     e.preventDefault();
     e.stopPropagation();
+    editSelectField(wrapper);
     moveHandle.setPointerCapture(e.pointerId);
+    isCaptured = true;
     dragStartX = e.clientX;
     dragStartY = e.clientY;
+    hasDragged = false;
     origPlacement = { ...field.placement };
   });
 
   moveHandle.addEventListener('pointermove', (e) => {
     if (!moveHandle.hasPointerCapture(e.pointerId)) return;
+    if (Math.abs(e.clientX - dragStartX) > 3 || Math.abs(e.clientY - dragStartY) > 3) {
+      hasDragged = true;
+    }
     // Use bounding rect to get the effective scale (canvas scale × CSS zoom).
     const pageWrapper = wrapper.closest<HTMLElement>('.page-wrapper');
     const effectiveScale = pageWrapper
@@ -271,10 +587,44 @@ function makeFieldInteractive(
     field.placement.x = origPlacement.x + dx;
     field.placement.y = origPlacement.y - dy; // PDF y is from bottom
     positionElement(wrapper, field, page, scale);
+
+    // Horizontal snap: compare canvas-scale pixel top against nearby fields
+    const overlay = wrapper.closest<HTMLElement>('.overlay');
+    if (overlay) {
+      const myTopPx = parseFloat(wrapper.style.top);
+      const myHeightPx = parseFloat(wrapper.style.height);
+      const snap = findYSnap(wrapper, overlay, myTopPx, myHeightPx, 8);
+      if (snap) {
+        // Adjust PDF y to match the snapped pixel top
+        field.placement.y = page.heightPt - snap.snappedTopPx / scale - field.placement.height;
+        positionElement(wrapper, field, page, scale);
+        showSnapGuide(overlay, snap.guidePx);
+      } else {
+        hideSnapGuide(overlay);
+      }
+    }
   });
 
   moveHandle.addEventListener('pointerup', () => {
+    if (!isCaptured) return; // pointerup without a prior pointerdown on this handle — ignore
+    isCaptured = false;
+    const overlay = wrapper.closest<HTMLElement>('.overlay');
+    if (overlay) hideSnapGuide(overlay);
+    if (!hasDragged) {
+      // Click on selected field (no drag): exit edit mode and focus the input.
+      const inputEl = wrapper.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+        'input[type="text"], textarea',
+      );
+      editSelectField(null);
+      if (inputEl) inputEl.focus();
+      return;
+    }
     onMutate();
+  });
+
+  moveHandle.addEventListener('pointercancel', () => {
+    isCaptured = false;
+    hasDragged = false;
   });
 
   // ── Resize handles ───────────────────────────────────────────────────────────
@@ -351,6 +701,14 @@ function attachResize(
     field.placement.width = width;
     field.placement.height = height;
     positionElement(wrapper, field, page, scale);
+
+    // Keep font size proportional to the new height
+    const inputEl = wrapper.querySelector<HTMLElement>('[data-max-font-size]');
+    if (inputEl) {
+      const maxSize = Math.round(height * scale * FONT_RATIO);
+      inputEl.dataset.maxFontSize = String(maxSize);
+      fitFontToBox(inputEl);
+    }
   });
 
   handle.addEventListener('pointerup', () => {
@@ -358,14 +716,238 @@ function attachResize(
   });
 }
 
-function initEditLayout(): void {
-  const btn = document.getElementById('edit-layout');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    document.body.classList.toggle('edit-layout');
-    btn.textContent = document.body.classList.contains('edit-layout')
-      ? 'Done editing'
-      : 'Edit layout';
+function initEditInteractions(
+  fpdfDoc: FpdfDocument,
+  pagesContainer: HTMLElement,
+  candidateById: Map<string, CandidateField>,
+  fieldById: Map<string, PdfField>,
+  onDirty: () => void,
+): void {
+  // Deselect and hide context menu on click outside
+  document.addEventListener('pointerdown', (e) => {
+    const target = e.target as HTMLElement;
+    if (!target.closest('.field-wrapper')) editSelectField(null);
+    if (!target.closest('.field-context-menu')) hideContextMenu(); // also hides submenu
+  });
+
+  // Delete key: remove selected candidate field
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Delete') return;
+    if (!editSelectedWrapper) return;
+    // Only bail if focus is inside the selected wrapper itself (user is typing).
+    // Focus in another wrapper (or nowhere) should still trigger deletion.
+    const active = document.activeElement;
+    if (active && editSelectedWrapper.contains(active)) return;
+    const cb = editDeleteCallbacks.get(editSelectedWrapper);
+    if (!cb) return;
+    e.preventDefault();
+    cb();
+  });
+
+  // Escape key: exit edit mode, dismiss context menu and name editor
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      editSelectField(null);
+      hideContextMenu();
+      hideNameEditor();
+    }
+  });
+
+  // Typing while a text field is selected: exit edit mode and route keystroke to input
+  document.addEventListener('keydown', (e) => {
+    if (!editSelectedWrapper) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key.length !== 1 && e.key !== 'Backspace') return;
+    const active = document.activeElement;
+    if (
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLSelectElement
+    )
+      return;
+    const inputEl = editSelectedWrapper.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+      'input[type="text"], textarea',
+    );
+    if (!inputEl) return;
+    editSelectField(null); // exit edit mode — makes input interactive
+    inputEl.focus();
+    // Don't preventDefault; the keypress will now land on the focused input
+  });
+
+  // Right-click context menu — exits edit mode only when not clicking on a field
+  pagesContainer.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const onField = (e.target as HTMLElement).closest('.field-wrapper') !== null;
+    if (!onField) editSelectField(null);
+
+    // Resolve page wrapper first — works whether click lands on overlay, canvas, or wrapper itself
+    const pageWrapper = (e.target as HTMLElement).closest<HTMLElement>('.page-wrapper');
+    if (!pageWrapper) return;
+    const overlay = pageWrapper.querySelector<HTMLElement>('.overlay');
+    if (!overlay) return;
+    const pageWrappers = Array.from(pagesContainer.querySelectorAll<HTMLElement>('.page-wrapper'));
+    const pageIndex = pageWrappers.indexOf(pageWrapper);
+    const docPage = fpdfDoc.pages[pageIndex];
+    if (!docPage) return;
+
+    // Capture non-null references for closures
+    const safeOverlay = overlay;
+    const safePageWrapper = pageWrapper;
+    const safePage = docPage;
+
+    const overlayRect = safeOverlay.getBoundingClientRect();
+    const effectiveScale = overlayRect.width / safePage.widthPt;
+    const canvas = safePageWrapper.querySelector('canvas');
+    const canvasScale = canvas ? canvas.width / safePage.widthPt : effectiveScale;
+
+    const clickX = e.clientX - overlayRect.left;
+    const clickY = e.clientY - overlayRect.top;
+
+    const DEFAULT_W = 120;
+    const DEFAULT_H = 20;
+    const xPdf = Math.max(0, clickX / effectiveScale - DEFAULT_W / 2);
+    const yPdf = Math.max(0, safePage.heightPt - clickY / effectiveScale - DEFAULT_H / 2);
+
+    const items: MenuItem[] = [];
+
+    const fieldWrapper = (e.target as HTMLElement).closest<HTMLElement>('.field-wrapper');
+    if (fieldWrapper) {
+      // Resolve the underlying field object (candidate or AcroForm)
+      const candidateInputEl = fieldWrapper.querySelector<HTMLElement>('[data-candidate="true"]');
+      const candidateId = candidateInputEl?.dataset.fieldId;
+      const candidateField = candidateId ? candidateById.get(candidateId) : undefined;
+      const acroInputEl = candidateInputEl
+        ? null
+        : fieldWrapper.querySelector<HTMLElement>('[data-field-id]');
+      const acroId = acroInputEl?.dataset.fieldId;
+      const acroField = acroId ? fieldById.get(acroId) : undefined;
+      const anyField: CandidateField | PdfField | undefined = candidateField ?? acroField;
+      const inputEl = fieldWrapper.querySelector<HTMLElement>('input, textarea, select');
+
+      // Duplicate: copy placement from wrapper CSS (canvas-scale pixels → PDF pts)
+      const wLeft = parseFloat(fieldWrapper.style.left);
+      const wTop = parseFloat(fieldWrapper.style.top);
+      const wWidth = parseFloat(fieldWrapper.style.width);
+      const wHeight = parseFloat(fieldWrapper.style.height);
+      const dupX = wLeft / canvasScale;
+      const dupW = wWidth / canvasScale;
+      const dupH = wHeight / canvasScale;
+      const dupY = safePage.heightPt - wTop / canvasScale - dupH;
+
+      items.push({
+        label: 'Duplicate field',
+        action: () => {
+          const OFFSET = 10;
+          const newField: CandidateField = {
+            id: crypto.randomUUID(),
+            type: 'text',
+            label: '',
+            displayName: 'Field',
+            placement: { x: dupX + OFFSET, y: dupY - OFFSET, width: dupW, height: dupH },
+            value: '',
+            confidence: 'high',
+            dismissed: false,
+          };
+          safePage.candidateFields.push(newField);
+          candidateById.set(newField.id, newField);
+          const wrapper = buildCandidateFieldElement(newField, safePage, canvasScale, onDirty);
+          safeOverlay.appendChild(wrapper);
+          const newInputEl = wrapper.querySelector<HTMLElement>('[data-max-font-size]');
+          if (newInputEl) fitFontToBox(newInputEl);
+          editSelectField(wrapper);
+          onDirty();
+        },
+      });
+
+      // Name field
+      if (anyField) {
+        const currentName = candidateField
+          ? candidateField.label || candidateField.displayName
+          : (acroField?.displayName ?? '');
+        items.push({
+          label: 'Name field',
+          action: () => {
+            showNameEditor(
+              currentName,
+              (newName) => {
+                if (candidateField) {
+                  candidateField.label = newName;
+                  candidateField.displayName = newName || 'Field';
+                } else if (acroField) {
+                  acroField.displayName = newName || acroField.name;
+                }
+                if (inputEl) inputEl.dataset.fieldName = newName;
+                onDirty();
+              },
+              e.clientX,
+              e.clientY,
+            );
+          },
+        });
+      }
+
+      // Text alignment
+      if (anyField && inputEl) {
+        const safeField = anyField;
+        const safeInputEl = inputEl;
+        items.push({
+          label: 'Text alignment',
+          submenu: (
+            [
+              { label: 'Center', value: 'center' },
+              { label: 'Justified', value: 'justify' },
+              { label: 'Left', value: 'left' },
+              { label: 'Right', value: 'right' },
+            ] as { label: string; value: 'left' | 'center' | 'right' | 'justify' }[]
+          ).map(({ label, value }) => ({
+            label,
+            action: () => {
+              safeField.textAlign = value;
+              safeInputEl.style.textAlign = value;
+              onDirty();
+            },
+          })),
+        });
+      }
+
+      // Delete (candidate fields only)
+      if (candidateField) {
+        items.push({
+          label: 'Delete field',
+          action: () => {
+            const cb = editDeleteCallbacks.get(fieldWrapper);
+            cb?.();
+          },
+        });
+      }
+    }
+
+    items.push({
+      label: 'Add field here',
+      action: () => {
+        const newField: CandidateField = {
+          id: crypto.randomUUID(),
+          type: 'text',
+          label: '',
+          displayName: 'Field',
+          placement: { x: xPdf, y: yPdf, width: DEFAULT_W, height: DEFAULT_H },
+          value: '',
+          confidence: 'high',
+          dismissed: false,
+        };
+        safePage.candidateFields.push(newField);
+        candidateById.set(newField.id, newField);
+        const wrapper = buildCandidateFieldElement(newField, safePage, canvasScale, onDirty);
+        safeOverlay.appendChild(wrapper);
+        const inputEl = wrapper.querySelector<HTMLElement>('[data-max-font-size]');
+        if (inputEl) fitFontToBox(inputEl);
+        editSelectField(wrapper);
+        onDirty();
+      },
+    });
+
+    items.sort((a, b) => a.label.localeCompare(b.label));
+    showContextMenu(items, e.clientX, e.clientY);
   });
 }
 
@@ -422,7 +1004,7 @@ function buildFieldElement(
     }
   }
 
-  el.title = field.tooltip ?? field.displayName;
+  el.dataset.fieldName = field.tooltip ?? field.displayName;
   el.dataset.fieldId = field.id;
   if (field.readOnly) (el as HTMLInputElement).disabled = true;
   if (field.required) el.setAttribute('aria-required', 'true');
@@ -433,10 +1015,14 @@ function buildFieldElement(
     const maxSize = Math.round(field.placement.height * scale * FONT_RATIO);
     el.dataset.maxFontSize = String(maxSize);
     el.style.fontSize = `${String(maxSize)}px`;
+    (el as HTMLInputElement | HTMLTextAreaElement).addEventListener('dblclick', () => {
+      (el as HTMLInputElement | HTMLTextAreaElement).select();
+    });
   }
 
   el.style.width = '100%';
   el.style.height = '100%';
+  if (field.textAlign) el.style.textAlign = field.textAlign;
 
   // Wrap in a positioned div so the required marker can be absolutely placed
   // alongside the input (inputs don't support ::before/::after cross-browser).
@@ -487,7 +1073,7 @@ function buildCandidateFieldElement(
     }
   }
 
-  el.title = field.label || field.displayName;
+  el.dataset.fieldName = field.label || field.displayName;
   el.dataset.fieldId = field.id;
   el.dataset.candidate = 'true';
 
@@ -495,15 +1081,28 @@ function buildCandidateFieldElement(
     const maxSize = Math.round(field.placement.height * scale * FONT_RATIO);
     el.dataset.maxFontSize = String(maxSize);
     el.style.fontSize = `${String(maxSize)}px`;
+    (el as HTMLInputElement | HTMLTextAreaElement).addEventListener('dblclick', () => {
+      (el as HTMLInputElement | HTMLTextAreaElement).select();
+    });
   }
 
   el.style.width = '100%';
   el.style.height = '100%';
+  if (field.textAlign) el.style.textAlign = field.textAlign;
 
   const wrapper = document.createElement('div');
   wrapper.className = 'field-wrapper';
   positionElement(wrapper, field, page, scale);
-  makeFieldInteractive(wrapper, field, page, scale, onDirty);
+
+  const onDelete = (): void => {
+    const idx = page.candidateFields.indexOf(field);
+    if (idx !== -1) page.candidateFields.splice(idx, 1);
+    if (editSelectedWrapper === wrapper) editSelectField(null);
+    wrapper.remove();
+    onDirty();
+  };
+
+  makeFieldInteractive(wrapper, field, page, scale, onDirty, onDelete);
   wrapper.appendChild(el);
   return wrapper;
 }
@@ -761,7 +1360,6 @@ async function main(): Promise<void> {
   });
   initToggle();
   initZoom();
-  initEditLayout();
   setStatus('Loading…');
 
   let baseText = '';
@@ -867,6 +1465,9 @@ async function main(): Promise<void> {
     });
   }
 
+  // Show a banner when the PDF kind has limited or no support.
+  const pdfKind = fpdfDoc.metadata.pdfKind;
+
   const hasUsableFields = fpdfDoc.pages.some(
     (p) =>
       p.fields.length > 0 ||
@@ -874,7 +1475,8 @@ async function main(): Promise<void> {
         (c) => (c.confidence === 'high' || c.confidence === 'medium') && c.type !== 'checkbox',
       ),
   );
-  if (!hasUsableFields) {
+  // For no-acroform PDFs the user can always add fields manually — don't disable UI.
+  if (!hasUsableFields && pdfKind !== 'no-acroform') {
     showWarning(
       'No fillable fields detected. This PDF appears to be a print-and-fill form — fpdf cannot fill it programmatically.',
     );
@@ -895,9 +1497,6 @@ async function main(): Promise<void> {
       clearBtn.title = noFieldsMsg;
     }
   }
-
-  // Show a banner when the PDF kind has limited or no support.
-  const pdfKind = fpdfDoc.metadata.pdfKind;
   if (pdfKind === 'xfa-hybrid') {
     showWarning(
       'This PDF uses XFA form technology. Fill it normally, or regenerate for broader PDF reader compatibility.',
@@ -945,17 +1544,18 @@ async function main(): Promise<void> {
     const pageTypes = new Set(fpdfDoc.pages.map((p) => p.pageType));
     if (pageTypes.has('raster') || pageTypes.has('raster+ocr')) {
       showWarning(
-        'This PDF appears to be a scanned document. fpdf cannot detect or fill fields in scanned images.',
+        'This PDF appears to be a scanned document. No fields were detected automatically — right-click anywhere on the page to add fields manually. Exported values will be stamped directly onto the page.',
       );
     } else {
-      // vector or hybrid — candidateFields only, no export
+      // vector or hybrid — candidateFields only; export stamps text onto the page
       showWarning(
-        'This PDF has no AcroForm fields. Detected fields are approximate and values cannot be exported back to PDF.',
+        'This PDF has no AcroForm fields. Detected field positions are approximate — click a field to adjust its layout. Exported values will be stamped directly onto the page.',
       );
     }
   }
 
   watchInputs(pagesContainer, fieldById, onDirty, candidateById);
+  initEditInteractions(fpdfDoc, pagesContainer, candidateById, fieldById, onDirty);
 
   const saveBtn = document.getElementById('save');
   saveBtn?.addEventListener('click', () => {

@@ -9,6 +9,7 @@ import {
   PDFName,
   PDFDict,
   StandardFonts,
+  TextAlignment,
   rgb,
 } from 'pdf-lib';
 import type { FpdfDocument, PdfKind } from './types.js';
@@ -85,9 +86,12 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
   const isXfa = isXfaKind ?? xfaInfo !== null;
 
   const allValues = new Map<string, string | boolean>();
+  const allAlignments = new Map<string, string>();
   for (const page of doc.pages) {
     for (const field of page.fields) {
       if (!allValues.has(field.name)) allValues.set(field.name, field.value);
+      if (field.textAlign && !allAlignments.has(field.name))
+        allAlignments.set(field.name, field.textAlign);
     }
   }
 
@@ -107,7 +111,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     const xfaValue = acroForm instanceof PDFDict ? acroForm.get(PDFName.of('XFA')) : undefined;
 
     // Step 3: Fill AcroForm widget values (getForm() strips /XFA internally).
-    writeAcroFormValues(pdfDoc, allValues, 'xfa-hybrid');
+    writeAcroFormValues(pdfDoc, allValues, allAlignments, 'xfa-hybrid');
 
     // Step 4: Generate widget appearances now that /XFA is already absent from
     // the in-memory dict — a second deleteXFA() call inside updateFieldAppearances
@@ -124,7 +128,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     return pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false });
   } else {
     // ── Pure AcroForm PDF ─────────────────────────────────────────────────────
-    writeAcroFormValues(pdfDoc, allValues, 'acroform');
+    writeAcroFormValues(pdfDoc, allValues, allAlignments, 'acroform');
   }
 
   return pdfDoc.save();
@@ -177,8 +181,17 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
         while (size > 6 && font.widthOfTextAtSize(value, size) > width - TEXT_PADDING * 2) {
           size -= 0.5;
         }
+        const textWidth = font.widthOfTextAtSize(value, size);
+        let textX: number;
+        if (candidate.textAlign === 'center') {
+          textX = x + (width - textWidth) / 2;
+        } else if (candidate.textAlign === 'right') {
+          textX = x + width - textWidth - TEXT_PADDING;
+        } else {
+          textX = x + TEXT_PADDING;
+        }
         page.drawText(value, {
-          x: x + TEXT_PADDING,
+          x: textX,
           y: y + TEXT_PADDING,
           size,
           font,
@@ -199,9 +212,17 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
  *   widget on-value array: stored value → index in getOnValues() → option name
  *   at that index in getOptions().
  */
+function toTextAlignment(align: string | undefined): TextAlignment | undefined {
+  if (align === 'center') return TextAlignment.Center;
+  if (align === 'right') return TextAlignment.Right;
+  if (align === 'left') return TextAlignment.Left;
+  return undefined; // 'justify' and undefined: leave the field's existing alignment
+}
+
 function writeAcroFormValues(
   pdfDoc: PDFDocument,
   values: Map<string, string | boolean>,
+  alignments: Map<string, string>,
   pdfKind: PdfKind,
 ): void {
   const form = pdfDoc.getForm();
@@ -211,6 +232,8 @@ function writeAcroFormValues(
 
       if (pdfField instanceof PDFTextField) {
         pdfField.setText(typeof value === 'string' ? value : '');
+        const alignment = toTextAlignment(alignments.get(name));
+        if (alignment !== undefined) pdfField.setAlignment(alignment);
       } else if (pdfField instanceof PDFCheckBox) {
         // Generate /AP /N appearance entries BEFORE check()/uncheck().
         // XFA checkbox widgets have no /AP /N entries (XFA renders its own

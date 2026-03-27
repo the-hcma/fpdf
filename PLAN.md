@@ -273,6 +273,41 @@ Detection algorithm (in `analyzer.ts`):
    - `"low"` — geometry survived noise filtering but is ambiguous (e.g., short line, unlabelled box)
 8. Emit each candidate as a `CandidateField` — these are **never** written back to the PDF (no AcroForm backing), only saved in `.fpdf.json`
 
+### Phase 2.5 — Section container heuristic (M10.10)
+
+Forms that draw fields as **horizontal lines inside outer rectangular sections** (e.g. Cigna pharmacy claim form) produce two detection problems:
+
+1. **Wide container cells** — Grid reconstruction creates cells for EVERY H-line pair, including wide H-lines that span multiple columns. These wide cells (which contain narrower per-field cells) appear as oversized yellow boxes in the UI.
+2. **Labels below the line** — Many print-and-fill forms place the field label *below* the fill-in blank, not above. The existing `findNearestLabel` only looks above or to the left.
+
+**Fix — Part A: Phase 1 container-cell suppression**
+
+After grid reconstruction phases 1/2/2b, post-process all raw cells before emitting:
+- A cell at `(x, y, w, h)` is a **container** if ≥ 2 other cells share the same approximate y-range (`|Δy| ≤ HLINE_SNAP`, `|Δh| ≤ HLINE_SNAP`) and their x-range is strictly contained within it (inner.x ≥ outer.x and inner.x + inner.w ≤ outer.x + outer.w).
+- Container cells are NOT emitted as `CandidateField` entries.
+- Non-container cells whose x-range is fully contained within a container cell are emitted with `labelHint: 'below'`.
+
+**Fix — Part B: `findLabelBelow`**
+
+New function, mirroring `findNearestLabel` but looking *downward*:
+- A text block qualifies if its baseline `by` is in `[box.y - 2*fontSize, box.y)` (just below the field's lower edge in PDF point space) and its centre-x falls within the field's x-range.
+
+**Fix — Part C: Phase 3 stroked-rect container heuristic**
+
+For forms where outer section boundaries are drawn as tall stroked rectangles (not H-line pairs):
+- Collect all stroked boxes with `h > MAX_FIELD_HEIGHT` into `deferredLargeBoxes` for deferred evaluation.
+- After collecting all H-lines, identify which deferred boxes are **section containers**: they enclose ≥ `SECTION_CONTAINER_MIN_HLINES` (2) H-lines within their x/y bounds.
+- Section containers are NOT emitted as fields.
+- H-lines inside a section container are grouped by approximate y (rows). Each row's lines are emitted as individual fields using `labelHint: 'below'`, with height = distance to the next row above (or container top).
+- Non-container deferred boxes are evaluated normally.
+
+**New constants:**
+```
+SECTION_CONTAINER_MIN_HLINES = 2   // min H-lines to treat a stroked rect as a container
+```
+
+**Integration test:** `src/__tests__/fixtures/cigna-pharmacy-claim-form.pdf` — a Cigna pharmacy claim form (PDF 1.3, 6 pages, vector/hybrid). Page 2 contains the prescription section with H-line fields inside outer section boxes. Expected: page 2 is `hybrid`, has ≥ 8 candidate fields in the prescription section, no container-width (≥ 250pt) fields emitted.
+
 ### Phase 3 — Scanned PDFs (future)
 - Would require OCR (e.g. `tesseract.js`) or a vision LLM — out of scope for now
 
@@ -351,4 +386,5 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | CI.2 | `03-24-test_increase_branch_coverage_to_80_` | Increase branch coverage from 74% → 80% (macOS): add tests for `debug-export` command, radio migration path, `POST /regenerate-acroform`, SPA catch-all route, select/dropdown fields in regenerator, textarea, unchecked checkbox, radio deduplication | 🔲 |
 | CI.3 | `03-24-chore_apply_graphite-recommended_ci_trigger_config` | Apply Graphite-recommended CI trigger config: explicit `types: [opened, reopened, synchronize]` + `branches-ignore: ['**/graphite-base/**']` to prevent merge-queue draft PRs from blocking CI | 🔲 |
 | CI.4 | `03-24-chore_add_new-pr_checklist_rule_to_agents.md` | Add new-PR checklist rule to AGENTS.md: confirm current PR is merged or all CI checks pass before starting new work | 🔲 |
+| 10.10 | — | Section container heuristic: Phase 1 container-cell suppression (wide H-line pair cells that contain narrower cells at the same y-range are filtered out); `findLabelBelow` for fields whose labels sit below the fill-in line; Phase 3 stroked-rect container detection (large outer rectangles that enclose ≥ 2 H-lines are treated as structural containers, not fields; H-lines inside are emitted as individual fields with below-label search); Cigna pharmacy claim form added as integration test fixture | 🔲 |
 | 11 | — | UI renders `candidateFields` in a distinct style per confidence level (dashed border, muted background); each widget has a dismiss × button that sets `dismissed: true` and saves; toolbar toggle shows/hides dismissed candidates | 🔲 |

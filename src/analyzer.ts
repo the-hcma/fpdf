@@ -580,8 +580,25 @@ const MAX_DIVIDER_HEIGHT = 20; // pt — thin stroked shapes in this range act a
 const COVERAGE_FILTER_THRESHOLD = 0.55; // > 55% text area coverage → instruction/content block, not a field
 /** Width ratio: an H-line used as a "container" boundary must be this much wider than the column line. */
 const CONTAINMENT_WIDTH_RATIO = 1.3;
+/**
+ * Stricter width ratio for Phase 2b (wide line BELOW a column underline).  Wider than
+ * CONTAINMENT_WIDTH_RATIO because the line below a column underline must be a true
+ * section/row separator — not just an adjacent column from a different row that happens
+ * to be slightly wider.  A ratio ≥ 2 reliably excludes adjacent row underlines.
+ */
+const P2B_WIDTH_RATIO = 2.0;
+/** Min individual segment width to consider for dash merging. */
+const DASH_SEGMENT_MIN_W = 3; // pt
+/** Max gap between consecutive dash segments to treat them as one logical H-line. */
+const DASH_MAX_GAP = 5; // pt
 /** Inset applied to all four sides of a candidate field so the input does not overlap border lines. */
 const FIELD_MARGIN = 3; // pt
+/**
+ * Minimum number of H-lines a deferred large stroked rectangle must enclose
+ * to be treated as a section container (Phase 3). Containers are not emitted
+ * as fields; their interior H-lines are emitted individually instead.
+ */
+const SECTION_CONTAINER_MIN_HLINES = 2;
 
 /**
  * Classify a PDF page based on its operator list and AcroForm field count.
@@ -695,6 +712,48 @@ function findNearestLabel(
 }
 
 /**
+ * Find the nearest TextBlock whose baseline sits just *below* the candidate
+ * bounding box (lower y in PDF point space). Used for forms that print field
+ * labels under the fill-in blank rather than above it.
+ */
+function findLabelBelow(
+  box: { x: number; y: number; w: number; h: number },
+  textBlocks: TextBlock[],
+): TextBlock | null {
+  let best: TextBlock | null = null;
+  let bestDist = Infinity;
+
+  const fieldCx = box.x + box.w / 2;
+  const fieldCy = box.y + box.h / 2;
+
+  for (const block of textBlocks) {
+    const bx = block.placement.x;
+    const by = block.placement.y;
+    const bw = block.placement.width;
+    const fs = block.fontSize;
+
+    // Below: block baseline is below the field bottom (box.y), within 2 font heights.
+    const isBelow = by < box.y && by >= box.y - 2 * fs;
+
+    // Horizontal overlap: block centre falls within the field x-range.
+    const blockCx = bx + bw / 2;
+    const horizontalOverlap =
+      bx < box.x + box.w && bx + bw > box.x && blockCx >= box.x && blockCx <= box.x + box.w;
+
+    if (isBelow && horizontalOverlap) {
+      const bcx = bx + bw / 2;
+      const bcy = by;
+      const dist = Math.sqrt((bcx - fieldCx) ** 2 + (bcy - fieldCy) ** 2);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = block;
+      }
+    }
+  }
+  return best;
+}
+
+/**
  * Return all TextBlocks that are substantially contained within [rx, ry, rw, rh]
  * (PDF coordinates, bottom-left origin). A block qualifies when at least 50% of
  * its own area overlaps with the rectangle — this avoids long paragraph blocks
@@ -763,6 +822,8 @@ function evaluateBox(
   textBlocks: TextBlock[],
   pageWidth: number,
   candidates: CandidateField[],
+  labelHint: 'above-left' | 'below' = 'above-left',
+  labelAtBottom = false,
 ): void {
   const { x, y, w, h } = box;
 
@@ -795,7 +856,12 @@ function evaluateBox(
   const labelBlocks = insideBlocks.filter((b) => b.fontSize <= h * 1.1);
 
   const insideLabel = labelBlocks[0] ?? null;
-  const externalLabel = insideLabel === null ? findNearestLabel({ x, y, w, h }, textBlocks) : null;
+  const externalLabel =
+    insideLabel === null
+      ? labelHint === 'below'
+        ? findLabelBelow({ x, y, w, h }, textBlocks)
+        : findNearestLabel({ x, y, w, h }, textBlocks)
+      : null;
   const labelSource: 'inside' | 'external' | 'none' =
     insideLabel !== null ? 'inside' : externalLabel !== null ? 'external' : 'none';
   const rawLabel =
@@ -859,7 +925,7 @@ function evaluateBox(
   // fields, additionally crop the top edge down to just below the label text
   // so the user fills in the blank area rather than typing over the label.
   const fieldX = x + FIELD_MARGIN;
-  const fieldY = y + FIELD_MARGIN;
+  let fieldY = y + FIELD_MARGIN;
   const fieldW = w - 2 * FIELD_MARGIN;
   let fieldH = h - 2 * FIELD_MARGIN;
 
@@ -873,12 +939,24 @@ function evaluateBox(
     if (fieldH < MIN_VISIBLE_HEIGHT) return;
   } else if (insideBlocks.length === 0 && type !== 'checkbox' && h >= 20) {
     // No inside text at all — likely a proprietary/undecodable label font.
-    // Reserve a fixed strip at the top of the cell so the input doesn't
-    // overlap any visually-printed label that pdfjs-dist could not decode.
-    const defaultInset = Math.min(Math.round(h * 0.3), 10);
+    // Reserve a strip so the fill area doesn't overlap the label zone.
+    // For inside-container Phase 1/2 cells the label is in the LOWER portion
+    // of the cell (below the underscores), so inset from the bottom (raise fieldY).
+    // For all other cells the label is above, so inset from the top (shrink fieldH).
+    const defaultInset = labelAtBottom
+      ? Math.min(Math.round(h * 0.55), 22)
+      : Math.min(Math.round(h * 0.3), 10);
+    if (labelAtBottom) {
+      fieldY += defaultInset;
+    }
     fieldH -= defaultInset;
     if (fieldH < MIN_VISIBLE_HEIGHT) return;
   }
+
+  // Rule: the fill area must be empty space — it sits above a field underline with the
+  // label printed below (or to the left).  If any text block has ≥ 50% of its area
+  // inside the computed fill area, the box is misplaced and should be discarded.
+  if (findInsideText(fieldX, fieldY, fieldW, fieldH, textBlocks).length > 0) return;
 
   candidates.push({
     id: randomUUID(),
@@ -929,13 +1007,24 @@ export function detectCandidateFields(
   // Horizontal line segments (h < MIN_VISIBLE_HEIGHT) collected for grid-cell reconstruction.
   const hLines: { x: number; y: number; w: number }[] = [];
 
+  // Short segments (w < MIN_FIELD_WIDTH but w >= DASH_SEGMENT_MIN_W) collected for dash merging.
+  const shortSegments: { x: number; y: number; w: number }[] = [];
+
+  // Large stroked boxes deferred for Phase 3 section-container analysis.
+  const deferredLargeBoxes: { x: number; y: number; w: number; h: number }[] = [];
+
   /**
    * Route a stroked box: if it is a near-zero-height line, collect it for grid
-   * reconstruction; otherwise evaluate it immediately as a candidate.
+   * reconstruction; otherwise evaluate it immediately as a candidate — unless
+   * the box is taller than MAX_FIELD_HEIGHT and not page-wide, in which case
+   * defer it for Phase 3 section-container analysis.
    */
   function routeBox(box: { x: number; y: number; w: number; h: number }): void {
     if (box.h < MIN_VISIBLE_HEIGHT && box.w >= MIN_FIELD_WIDTH) {
       hLines.push({ x: box.x, y: box.y, w: box.w });
+    } else if (box.h < MIN_VISIBLE_HEIGHT && box.w >= DASH_SEGMENT_MIN_W) {
+      // Short dashes: collect for merging — may form a logical dashed underline.
+      shortSegments.push({ x: box.x, y: box.y, w: box.w });
     } else {
       // Wide thin shapes (section header bars) act as row dividers even when
       // they are too wide to be candidate fields themselves.  Record their
@@ -944,7 +1033,12 @@ export function detectCandidateFields(
       if (box.h <= MAX_DIVIDER_HEIGHT && box.w >= MIN_FIELD_WIDTH) {
         hLines.push({ x: box.x, y: box.y, w: box.w });
       }
-      evaluateBox(box, textBlocks, pageWidth, candidates);
+      // Tall, non-page-wide boxes may be section containers — defer them.
+      if (box.h > MAX_FIELD_HEIGHT && box.w < pageWidth * NOISE_WIDTH_RATIO) {
+        deferredLargeBoxes.push(box);
+      } else {
+        evaluateBox(box, textBlocks, pageWidth, candidates);
+      }
     }
   }
 
@@ -1007,6 +1101,51 @@ export function detectCandidateFields(
     }
   }
 
+  // ── Dash-segment merging ─────────────────────────────────────────────────────
+  // Some forms draw field underlines as dashed lines (series of short segments).
+  // Merge consecutive segments at the same y-snap level into a single H-line when
+  // the inter-segment gap is ≤ DASH_MAX_GAP.  The resulting span is added to hLines
+  // so the grid-cell reconstruction treats it as a regular H-line underline.
+  {
+    const byYSnap = new Map<number, { x: number; y: number; w: number }[]>();
+    for (const seg of shortSegments) {
+      const key = hSnap(seg.y);
+      const bucket = byYSnap.get(key) ?? [];
+      bucket.push(seg);
+      byYSnap.set(key, bucket);
+    }
+    for (const bucket of byYSnap.values()) {
+      bucket.sort((a, b) => a.x - b.x);
+      const first = bucket[0];
+      if (first === undefined) continue;
+      let spanStartX = first.x;
+      let spanY = first.y;
+      let spanEndX = first.x + first.w;
+      for (let i = 1; i < bucket.length; i++) {
+        const seg = bucket[i];
+        if (seg === undefined) continue;
+        const gap = seg.x - spanEndX;
+        if (gap <= DASH_MAX_GAP) {
+          // Extend the current span to include this segment.
+          spanEndX = seg.x + seg.w;
+        } else {
+          // Gap too large: emit current span if wide enough, start new.
+          const totalW = spanEndX - spanStartX;
+          if (totalW >= MIN_FIELD_WIDTH) {
+            hLines.push({ x: spanStartX, y: spanY, w: totalW });
+          }
+          spanStartX = seg.x;
+          spanY = seg.y;
+          spanEndX = seg.x + seg.w;
+        }
+      }
+      const totalW = spanEndX - spanStartX;
+      if (totalW >= MIN_FIELD_WIDTH) {
+        hLines.push({ x: spanStartX, y: spanY, w: totalW });
+      }
+    }
+  }
+
   // ── Grid-cell reconstruction ─────────────────────────────────────────────────
   // Forms that draw fields as a grid of horizontal underlines (not closed boxes)
   // leave no strokeable rectangles in the operator list. Reconstruct the implied
@@ -1032,6 +1171,13 @@ export function detectCandidateFields(
     hLineGroups.set(groupKey, group);
   }
 
+  // Raw cells collected from phases 1/2/2b — emitted after container analysis.
+  // phase2b=true marks cells created by Phase 2b (box spans from a wide container
+  // BELOW the column H-line UP TO the H-line).  For inside-container cells these
+  // are flipped to be ABOVE the H-line so the box covers the fill area, not the
+  // label zone.
+  const rawCells: { x: number; y: number; w: number; h: number; phase2b?: true }[] = [];
+
   // Phase 1: exact x-range pairs — column H-lines at matching extents form cells.
   for (const group of hLineGroups.values()) {
     if (group.length < 2) continue;
@@ -1044,7 +1190,7 @@ export function detectCandidateFields(
       // Skip near-zero gaps (duplicate lines) and excessively tall spans.
       if (h < MIN_VISIBLE_HEIGHT) continue;
       if (h > MAX_FIELD_HEIGHT * 2) continue;
-      evaluateBox({ x: bottom.x, y: bottom.y, w: bottom.w, h }, textBlocks, pageWidth, candidates);
+      rawCells.push({ x: bottom.x, y: bottom.y, w: bottom.w, h });
     }
   }
 
@@ -1083,12 +1229,7 @@ export function detectCandidateFields(
       const overlapW = overlapEnd - overlapStart;
       if (overlapW < topLine.w * 0.8) continue;
 
-      evaluateBox(
-        { x: topLine.x, y: topLine.y, w: topLine.w, h },
-        textBlocks,
-        pageWidth,
-        candidates,
-      );
+      rawCells.push({ x: topLine.x, y: topLine.y, w: topLine.w, h });
     }
   }
 
@@ -1106,7 +1247,8 @@ export function detectCandidateFields(
       if (h < MIN_VISIBLE_HEIGHT || h > MAX_FIELD_HEIGHT) continue;
 
       // "other" must be significantly wider (section divider, not a column line).
-      if (other.w < bottomLine.w * CONTAINMENT_WIDTH_RATIO) continue;
+      // Uses the stricter P2B_WIDTH_RATIO to avoid pairing with adjacent row underlines.
+      if (other.w < bottomLine.w * P2B_WIDTH_RATIO) continue;
 
       // "other" must span at least 80% of the column line's x-range.
       const overlapStart = Math.max(bottomLine.x, other.x);
@@ -1114,12 +1256,195 @@ export function detectCandidateFields(
       const overlapW = overlapEnd - overlapStart;
       if (overlapW < bottomLine.w * 0.8) continue;
 
-      evaluateBox(
-        { x: bottomLine.x, y: other.y, w: bottomLine.w, h },
-        textBlocks,
-        pageWidth,
-        candidates,
-      );
+      rawCells.push({ x: bottomLine.x, y: other.y, w: bottomLine.w, h, phase2b: true });
+    }
+  }
+
+  // ── Container analysis (Phases 1/2/2b post-processing) ──────────────────────
+  // Some forms draw a wide H-line spanning an entire section row alongside
+  // narrower H-lines for individual columns at the same y-level.  The wide
+  // cell is a "section container" — it should not be emitted as a candidate
+  // field.  Cells whose y-range overlaps a container cell AND whose x-range
+  // is fully enclosed by the container are labelled with hint='below' because
+  // such forms print field labels under (not above) the fill-in line.
+  //
+  // A cell is a container when ≥ 1 other cell has an overlapping y-range,
+  // a strictly narrower width, and an x-range that fits inside it.
+  //
+  // Phase 2b cells are excluded from being containers: before the flip their
+  // y-range is artificial (spanning from a wide separator below UP to the column
+  // underline), so they would incorrectly absorb adjacent row cells as "contained".
+  const containerCellSet = new Set<number>();
+  const insideContainerSet = new Set<number>();
+
+  for (let i = 0; i < rawCells.length; i++) {
+    const outer = rawCells[i];
+    if (outer === undefined) continue;
+    if (outer.phase2b) continue; // Phase 2b pre-flip spans are artificial — skip as candidates for container
+    let containedCount = 0;
+    for (let j = 0; j < rawCells.length; j++) {
+      if (i === j) continue;
+      const inner = rawCells[j];
+      if (inner === undefined) continue;
+      // For Phase 2b cells, use the flipped y-range ([cell.y+cell.h, cell.y+2*cell.h])
+      // to avoid pairing the artificial pre-flip span against real cells.
+      const innerY = inner.phase2b ? inner.y + inner.h : inner.y;
+      // y-ranges must overlap.
+      if (innerY + inner.h <= outer.y || innerY >= outer.y + outer.h) continue;
+      // inner must be strictly narrower.
+      if (inner.w >= outer.w) continue;
+      // inner x-range must be contained within outer x-range.
+      if (inner.x < outer.x - HLINE_SNAP) continue;
+      if (inner.x + inner.w > outer.x + outer.w + HLINE_SNAP) continue;
+      containedCount++;
+    }
+    if (containedCount >= 1) containerCellSet.add(i);
+  }
+
+  // Mark which non-container cells are inside a container.
+  // For Phase 2b cells, check the flipped (emitted) position against containers.
+  for (let j = 0; j < rawCells.length; j++) {
+    if (containerCellSet.has(j)) continue;
+    const inner = rawCells[j];
+    if (inner === undefined) continue;
+    // Use flipped y for Phase 2b cells to check against container y-range.
+    const innerY = inner.phase2b ? inner.y + inner.h : inner.y;
+    for (const i of containerCellSet) {
+      const outer = rawCells[i];
+      if (outer === undefined) continue;
+      if (innerY + inner.h <= outer.y || innerY >= outer.y + outer.h) continue;
+      if (inner.x >= outer.x - HLINE_SNAP && inner.x + inner.w <= outer.x + outer.w + HLINE_SNAP) {
+        insideContainerSet.add(j);
+        break;
+      }
+    }
+  }
+
+  // Emit non-container cells.
+  //
+  // Phase 2b creates cells that span from a wide H-line BELOW a column underline
+  // UP TO that underline.  For forms that print labels below their underlines (the
+  // "inside container" case), this places the box over the label zone rather than
+  // the fill zone.  Flip those cells to sit ABOVE the underline instead.
+  //
+  // Multiple Phase 2b entries can reference the same underline (one per wider
+  // H-line below it), producing duplicates after flipping.  Cells from Phase 2
+  // likewise cover the same underline from above.  Collect all surviving cells,
+  // sort by h ascending (smallest box wins), and deduplicate by snapped (x, y) so
+  // only the tightest non-overlapping box is emitted per field position.
+  interface EmitCell {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    hint: 'above-left' | 'below';
+    labelAtBottom: boolean;
+  }
+  const toEmit: EmitCell[] = [];
+
+  for (let i = 0; i < rawCells.length; i++) {
+    if (containerCellSet.has(i)) continue;
+    const cell = rawCells[i];
+    if (cell === undefined) continue;
+    const isInside = insideContainerSet.has(i);
+    const hint: 'above-left' | 'below' = isInside ? 'below' : 'above-left';
+
+    if (cell.phase2b && isInside) {
+      // Flip: the underline is at cell.y + cell.h; the fill area is above it.
+      toEmit.push({
+        x: cell.x,
+        y: cell.y + cell.h,
+        w: cell.w,
+        h: cell.h,
+        hint,
+        labelAtBottom: false,
+      });
+    } else {
+      toEmit.push({ x: cell.x, y: cell.y, w: cell.w, h: cell.h, hint, labelAtBottom: isInside });
+    }
+  }
+
+  // Sort smallest-h first so the tightest box wins the dedup.
+  // When heights are within a small tolerance, prefer labelAtBottom=true so that
+  // correctly-oriented inside-container cells win over overlapping outside-container
+  // duplicates at the same position.
+  toEmit.sort((a, b) => {
+    const hDiff = a.h - b.h;
+    if (Math.abs(hDiff) < 5 && a.labelAtBottom !== b.labelAtBottom) {
+      return a.labelAtBottom ? -1 : 1;
+    }
+    return hDiff;
+  });
+
+  const emittedPositions = new Set<string>();
+  for (const ec of toEmit) {
+    const posKey = `${hSnap(ec.x).toString()},${hSnap(ec.y).toString()}`;
+    if (emittedPositions.has(posKey)) continue;
+    emittedPositions.add(posKey);
+    evaluateBox(
+      { x: ec.x, y: ec.y, w: ec.w, h: ec.h },
+      textBlocks,
+      pageWidth,
+      candidates,
+      ec.hint,
+      ec.labelAtBottom,
+    );
+  }
+
+  // ── Phase 3: stroked-rect section containers ─────────────────────────────────
+  // Large stroked rectangles (h > MAX_FIELD_HEIGHT) that enclose ≥
+  // SECTION_CONTAINER_MIN_HLINES H-lines are treated as section containers:
+  // the rectangle itself is not a field, and each H-line inside it is emitted
+  // as an individual field with labelHint='below'.
+  //
+  // Large rectangles that do not qualify as section containers are evaluated
+  // normally as candidate fields.
+  for (const box of deferredLargeBoxes) {
+    const enclosed = hLines.filter(
+      (line) =>
+        line.x >= box.x - HLINE_SNAP &&
+        line.x + line.w <= box.x + box.w + HLINE_SNAP &&
+        line.y >= box.y &&
+        line.y <= box.y + box.h,
+    );
+
+    if (enclosed.length < SECTION_CONTAINER_MIN_HLINES) {
+      // Not a section container — evaluate as a regular (tall) candidate field.
+      evaluateBox(box, textBlocks, pageWidth, candidates);
+      continue;
+    }
+
+    // Section container: group enclosed H-lines by approximate y (rows).
+    const yGroupMap = new Map<number, { x: number; y: number; w: number }[]>();
+    for (const line of enclosed) {
+      const key = hSnap(line.y);
+      const bucket = yGroupMap.get(key) ?? [];
+      bucket.push(line);
+      yGroupMap.set(key, bucket);
+    }
+
+    // Sort row y-values ascending (lowest y = bottommost row in PDF space).
+    const sortedYs = [...yGroupMap.keys()].sort((a, b) => a - b);
+    const containerTop = box.y + box.h;
+
+    for (let i = 0; i < sortedYs.length; i++) {
+      const rowY = sortedYs[i];
+      if (rowY === undefined) continue;
+      // Upper boundary: next row above, or container top.
+      const upperY = sortedYs[i + 1] ?? containerTop;
+      const fieldH = Math.min(upperY - rowY, MAX_FIELD_HEIGHT);
+      if (fieldH < MIN_VISIBLE_HEIGHT) continue;
+
+      for (const line of yGroupMap.get(rowY) ?? []) {
+        evaluateBox(
+          { x: line.x, y: rowY, w: line.w, h: fieldH },
+          textBlocks,
+          pageWidth,
+          candidates,
+          'below',
+          true,
+        );
+      }
     }
   }
 

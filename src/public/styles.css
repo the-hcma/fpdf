@@ -247,6 +247,93 @@ body {
   border-radius: 2px;
 }
 
+/* Candidate fields use a red border so they're visually distinct from AcroForm fields */
+.show-fields .overlay [data-candidate='true'] {
+  border-color: rgba(200, 0, 0, 0.5);
+}
+
+/* ── Edit-layout mode ── */
+
+.field-move-handle {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: move;
+  z-index: 10;
+  pointer-events: auto;
+  background: rgba(0, 100, 255, 0.3);
+}
+
+.edit-layout .field-move-handle {
+  display: block;
+}
+
+.field-resize-handle {
+  display: none;
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: rgba(0, 100, 255, 0.7);
+  border-radius: 1px;
+  z-index: 11;
+  pointer-events: auto;
+}
+
+.edit-layout .field-resize-handle {
+  display: block;
+}
+
+.field-resize-handle[data-dir='n'] {
+  top: -3px;
+  left: calc(50% - 3px);
+  cursor: n-resize;
+}
+
+.field-resize-handle[data-dir='ne'] {
+  top: -3px;
+  right: -3px;
+  cursor: ne-resize;
+}
+
+.field-resize-handle[data-dir='e'] {
+  top: calc(50% - 3px);
+  right: -3px;
+  cursor: e-resize;
+}
+
+.field-resize-handle[data-dir='se'] {
+  bottom: -3px;
+  right: -3px;
+  cursor: se-resize;
+}
+
+.field-resize-handle[data-dir='s'] {
+  bottom: -3px;
+  left: calc(50% - 3px);
+  cursor: s-resize;
+}
+
+.field-resize-handle[data-dir='sw'] {
+  bottom: -3px;
+  left: -3px;
+  cursor: sw-resize;
+}
+
+.field-resize-handle[data-dir='w'] {
+  top: calc(50% - 3px);
+  left: -3px;
+  cursor: w-resize;
+}
+
+.field-resize-handle[data-dir='nw'] {
+  top: -3px;
+  left: -3px;
+  cursor: nw-resize;
+}
+
 /* ── Error banner ── */
 
 #error-banner {

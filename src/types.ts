@@ -12,8 +12,8 @@ export type FieldType = 'text' | 'textarea' | 'checkbox' | 'radio' | 'select';
  *
  * acroform   — has AcroForm fields (pdf-lib); editable + exportable to PDF
  * vector     — digitally created, no AcroForm; editable via candidateFields, not exportable
- * raster     — scanned image only; no fields detected, not editable
- * raster+ocr — scanned image with embedded OCR text layer; not editable
+ * raster     — scanned image only; no fields auto-detected; fields can be added manually
+ * raster+ocr — scanned image with embedded OCR text layer; fields can be added manually
  * hybrid     — images + vector paths; editable via candidateFields, not exportable
  */
 export type PageType = 'acroform' | 'vector' | 'raster' | 'raster+ocr' | 'hybrid';
@@ -36,8 +36,8 @@ export type CandidateFieldConfidence = 'high' | 'medium' | 'low';
  * page content stream. Used for non-AcroForm PDFs where "write here" areas are
  * drawn rather than declared as AcroForm widgets.
  *
- * CandidateFields are never written back to the PDF (no AcroForm backing) —
- * values are saved only in the .fpdf.json file.
+ * CandidateFields have no AcroForm backing — on export, values are stamped
+ * as drawn text directly onto the page rather than written into AcroForm widgets.
  */
 export interface CandidateField {
   /** Stable UUID generated at analysis time. */
@@ -52,6 +52,8 @@ export interface CandidateField {
   confidence: CandidateFieldConfidence;
   /** True when the user has explicitly dismissed this candidate. Hidden in UI; preserved in JSON. */
   dismissed: boolean;
+  /** Text alignment for the input field, set by the user. */
+  textAlign?: 'left' | 'center' | 'right' | 'justify';
 }
 
 export interface Placement {
@@ -94,6 +96,8 @@ export interface PdfField {
    * option string rather than a boolean.
    */
   radioValue?: string;
+  /** Text alignment for the input field, set by the user. */
+  textAlign?: 'left' | 'center' | 'right' | 'justify';
 }
 
 /**

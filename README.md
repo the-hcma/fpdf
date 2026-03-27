@@ -79,7 +79,8 @@ fpdf classifies every PDF by its form structure on first open and shows a status
 | **AcroForm** | Standard interactive PDF with AcroForm fields | ✅ | ✅ |
 | **XFA + AcroForm** (hybrid) | Has both XFA datasets and AcroForm widgets (e.g. Cigna forms) | ✅ | ✅ |
 | **Pure XFA** | XFA-only; no traditional AcroForm | ⚠️ limited | ⚠️ limited |
-| **No AcroForm** | Scanned or vector-drawn PDF with no interactive fields | ❌ | ❌ |
+| **No AcroForm — vector/hybrid** | Digitally created PDF with draw-in fields (no AcroForm); fields detected from vector paths | ✅ | ✅ text stamped |
+| **No AcroForm — scanned** | Scanned image-only PDF; no auto-detected fields; add fields manually | ✅ manual | ✅ text stamped |
 
 ### XFA regeneration
 
@@ -109,6 +110,23 @@ Writes filled values back into the original PDF and saves a new file alongside i
 - **Zoom** — toolbar buttons or Ctrl+scroll (mouse wheel).
 - **Tab order** — Tab and Shift+Tab step through fields in reading order (top-to-bottom, left-to-right).
 - **Copy path** — copies the absolute path of the current PDF to the clipboard.
+
+### Edit layout (vector/no-AcroForm PDFs)
+
+For PDFs where fields are detected from vector paths rather than declared as AcroForm widgets, fpdf lets you adjust the detected layout before filling:
+
+- **Click a field** to select it (move/resize handles appear). Click the selected field again to switch to typing mode.
+- **Drag** a selected field to reposition it; edges of other fields snap horizontally.
+- **Resize** using the 8 corner/edge handles.
+- **Right-click** anywhere on the page for a context menu:
+  - **Add field here** — draw a new text field at the cursor position.
+  - **Duplicate field** — copy the right-clicked field with a small offset.
+  - **Name field** — set a label stored in the `.fpdf.json`.
+  - **Text alignment** — set left, center, right, or justified alignment (cascading submenu); alignment is preserved on export.
+  - **Delete field** — remove a candidate field (candidate fields only).
+- **Delete key** — delete the selected candidate field.
+- **ESC** — exit edit mode without changing the selection.
+- **Hover** over a field for 600 ms to see its name and available operations in a tooltip.
 
 ## Print
 

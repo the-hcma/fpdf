@@ -267,9 +267,15 @@ function hideTooltip(): void {
 
 // ── Context menu ──────────────────────────────────────────────────────────────
 
+interface SubMenuItem {
+  label: string;
+  hint?: string;
+  action: () => void;
+}
+
 type MenuItem =
   | { label: string; action: () => void; submenu?: never }
-  | { label: string; submenu: { label: string; action: () => void }[]; action?: never };
+  | { label: string; submenu: SubMenuItem[]; action?: never };
 
 const contextMenuEl = document.createElement('div');
 contextMenuEl.className = 'field-context-menu';
@@ -284,15 +290,25 @@ function hideSubMenu(): void {
   subMenuEl.innerHTML = '';
 }
 
-function showSubMenu(
-  items: { label: string; action: () => void }[],
-  triggerBtn: HTMLElement,
-): void {
+function showSubMenu(items: SubMenuItem[], triggerBtn: HTMLElement): void {
   subMenuEl.innerHTML = '';
   for (const item of items) {
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.textContent = item.label;
+    if (item.hint !== undefined) {
+      const body = document.createElement('span');
+      body.className = 'menu-item-body';
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = item.label;
+      const hintSpan = document.createElement('span');
+      hintSpan.className = 'menu-hint';
+      hintSpan.textContent = item.hint;
+      body.appendChild(labelSpan);
+      body.appendChild(hintSpan);
+      btn.appendChild(body);
+    } else {
+      btn.textContent = item.label;
+    }
     btn.addEventListener('click', () => {
       hideContextMenu();
       item.action();
@@ -503,13 +519,21 @@ function makeFieldInteractive(
     (e) => {
       if (document.body.classList.contains('edit-layout')) return;
       if (e.button !== 0) return;
-      // Never intercept clicks on radio/checkbox — let them toggle normally.
+      // For radio/checkbox: Ctrl/Cmd+click selects for repositioning; plain click toggles.
       const target = e.target as HTMLElement;
       if (
         target instanceof HTMLInputElement &&
         (target.type === 'radio' || target.type === 'checkbox')
-      )
+      ) {
+        if (e.ctrlKey || e.metaKey) {
+          e.stopPropagation();
+          e.preventDefault();
+          hideContextMenu();
+          hideNameEditor();
+          editSelectField(wrapper);
+        }
         return;
+      }
       if (wrapper.contains(document.activeElement)) return;
       e.stopPropagation();
       e.preventDefault();
@@ -528,11 +552,17 @@ function makeFieldInteractive(
       const inputEl = wrapper.querySelector<HTMLElement>('[data-field-id]');
       const name = inputEl ? (inputEl.dataset.fieldName ?? '').trim() : '';
       const inEdit = document.body.classList.contains('edit-layout');
+      const inputEl2 = wrapper.querySelector<HTMLInputElement>(
+        'input[type="radio"], input[type="checkbox"]',
+      );
+      const isToggle = inputEl2 !== null;
       const hints = onDelete
         ? 'Drag: move · Corners: resize · Del: delete'
         : 'Drag: move · Corners: resize';
+      const selectHint = isToggle && !inEdit ? 'Ctrl+click: select to reposition' : '';
       let text = name;
       if (inEdit) text = text ? `${text} · ${hints}` : hints;
+      else if (selectHint) text = text ? `${text} · ${selectHint}` : selectHint;
       if (text) showTooltip(text, tooltipMouseX, tooltipMouseY);
     }, 600);
   });
@@ -805,8 +835,6 @@ function initEditInteractions(
 
     const DEFAULT_W = 120;
     const DEFAULT_H = 20;
-    const xPdf = Math.max(0, clickX / effectiveScale - DEFAULT_W / 2);
-    const yPdf = Math.max(0, safePage.heightPt - clickY / effectiveScale - DEFAULT_H / 2);
 
     const items: MenuItem[] = [];
 
@@ -922,28 +950,97 @@ function initEditInteractions(
       }
     }
 
+    const addField = (type: CandidateField['type']): void => {
+      const TOGGLE_SIZE = 14; // ~0.5cm in PDF points (1pt = 1/72in, 0.5cm ≈ 14.17pt)
+      const w = type === 'radio' || type === 'checkbox' ? TOGGLE_SIZE : DEFAULT_W;
+      const h = type === 'radio' || type === 'checkbox' ? TOGGLE_SIZE : DEFAULT_H;
+      // Center the new field on the cursor using its actual dimensions.
+      const xPdf = Math.max(0, clickX / effectiveScale - w / 2);
+      const yPdf = Math.max(0, safePage.heightPt - clickY / effectiveScale - h / 2);
+      // For radio buttons, find an existing groupName on this page or create one.
+      let groupName: string | undefined;
+      if (type === 'radio') {
+        const existing = safePage.candidateFields.find(
+          (c) => !c.dismissed && c.type === 'radio' && c.groupName,
+        );
+        if (existing?.groupName) {
+          groupName = existing.groupName;
+        } else {
+          // Generate a unique group name not already used on this page.
+          let base = 'RadioGroup';
+          let n = 1;
+          const usedGroups = new Set(
+            safePage.candidateFields.filter((c) => c.groupName).map((c) => c.groupName),
+          );
+          while (usedGroups.has(base)) {
+            base = `RadioGroup_${String(n++)}`;
+          }
+          groupName = base;
+        }
+      }
+      // For radio buttons, generate a unique on-value within the group.
+      const radioValue =
+        type === 'radio'
+          ? (() => {
+              const siblings = safePage.candidateFields.filter(
+                (c) => !c.dismissed && c.type === 'radio' && c.groupName === groupName,
+              );
+              return `option${String(siblings.length + 1)}`;
+            })()
+          : undefined;
+
+      const newField: CandidateField = {
+        id: crypto.randomUUID(),
+        type,
+        label: '',
+        displayName: type === 'radio' ? (groupName ?? 'RadioGroup') : 'Field',
+        placement: { x: xPdf, y: yPdf, width: w, height: h },
+        value: '',
+        confidence: 'high',
+        dismissed: false,
+      };
+      if (radioValue !== undefined) newField.radioValue = radioValue;
+      if (groupName !== undefined) newField.groupName = groupName;
+      safePage.candidateFields.push(newField);
+      candidateById.set(newField.id, newField);
+      const wrapper = buildCandidateFieldElement(newField, safePage, canvasScale, onDirty);
+      safeOverlay.appendChild(wrapper);
+      const inputEl = wrapper.querySelector<HTMLElement>('[data-max-font-size]');
+      if (inputEl) fitFontToBox(inputEl);
+      editSelectField(wrapper);
+      onDirty();
+    };
+
     items.push({
       label: 'Add field here',
-      action: () => {
-        const newField: CandidateField = {
-          id: crypto.randomUUID(),
-          type: 'text',
-          label: '',
-          displayName: 'Field',
-          placement: { x: xPdf, y: yPdf, width: DEFAULT_W, height: DEFAULT_H },
-          value: '',
-          confidence: 'high',
-          dismissed: false,
-        };
-        safePage.candidateFields.push(newField);
-        candidateById.set(newField.id, newField);
-        const wrapper = buildCandidateFieldElement(newField, safePage, canvasScale, onDirty);
-        safeOverlay.appendChild(wrapper);
-        const inputEl = wrapper.querySelector<HTMLElement>('[data-max-font-size]');
-        if (inputEl) fitFontToBox(inputEl);
-        editSelectField(wrapper);
-        onDirty();
-      },
+      submenu: [
+        {
+          label: 'Checkbox',
+          action: () => {
+            addField('checkbox');
+          },
+        },
+        {
+          label: 'Radio button',
+          action: () => {
+            addField('radio');
+          },
+        },
+        {
+          label: 'Text field',
+          hint: 'single line',
+          action: () => {
+            addField('text');
+          },
+        },
+        {
+          label: 'Textarea',
+          hint: 'multi-line',
+          action: () => {
+            addField('textarea');
+          },
+        },
+      ],
     });
 
     items.sort((a, b) => a.label.localeCompare(b.label));
@@ -1062,6 +1159,24 @@ function buildCandidateFieldElement(
       cb.type = 'checkbox';
       cb.checked = field.value === true;
       el = cb;
+      break;
+    }
+    case 'radio': {
+      const rb = document.createElement('input');
+      rb.type = 'radio';
+      rb.name = field.groupName ?? field.id;
+      rb.value = field.radioValue ?? '';
+      rb.checked = typeof field.value === 'string' && field.value === field.radioValue;
+      rb.addEventListener('change', () => {
+        if (rb.checked) {
+          // Sync the selected value to all candidates in the same group on this page.
+          for (const c of page.candidateFields) {
+            if (c.groupName === field.groupName) c.value = field.radioValue ?? '';
+          }
+          onDirty();
+        }
+      });
+      el = rb;
       break;
     }
     default: {

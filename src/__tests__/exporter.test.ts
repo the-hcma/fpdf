@@ -27,7 +27,11 @@ async function writeTempPdf(name: string, bytes: Uint8Array): Promise<string> {
   return p;
 }
 
-function makeDoc(fields: Partial<PdfField>[], pdfKind: PdfKind = 'acroform'): FpdfDocument {
+function makeDoc(
+  fields: Partial<PdfField>[],
+  pdfKind: PdfKind = 'acroform',
+  candidateFields: CandidateField[] = [],
+): FpdfDocument {
   return {
     metadata: {
       version: '1.0',
@@ -58,7 +62,7 @@ function makeDoc(fields: Partial<PdfField>[], pdfKind: PdfKind = 'acroform'): Fp
           options: [],
           ...f,
         })),
-        candidateFields: [],
+        candidateFields,
         textBlocks: [],
       },
     ],
@@ -409,10 +413,9 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     expect(selected).toBe('Yes');
   });
 
-  // ── Candidate field overlay (drawCandidateValues) ──────────────────────────
+  // ── Candidate field AcroForm export (createCandidateWidgets) ────────────────
 
-  it('draws candidate text values as a text overlay on the exported PDF', async () => {
-    // Build a plain PDF with no AcroForm fields.
+  it('exports candidate text fields as AcroForm widgets', async () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
@@ -454,14 +457,15 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     };
 
     const bytes = await exportPdf(plainPath, doc);
-    // The exported PDF should be valid and loadable (text is drawn as content stream).
     const result = await PDFDocument.load(bytes);
     expect(result.getPageCount()).toBe(1);
-    // No AcroForm fields — the form has no fields.
-    expect(result.getForm().getFields()).toHaveLength(0);
+    // Candidate is now exported as a real AcroForm text widget.
+    const fields = result.getForm().getFields();
+    expect(fields).toHaveLength(1);
+    expect(result.getForm().getTextField('Name').getText()).toBe('Alice');
   });
 
-  it('draws an X for a checked candidate checkbox', async () => {
+  it('exports a checked candidate checkbox as an AcroForm checkbox widget', async () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
@@ -505,6 +509,8 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const bytes = await exportPdf(plainPath, doc);
     const result = await PDFDocument.load(bytes);
     expect(result.getPageCount()).toBe(1);
+    // Candidate exported as a real AcroForm checkbox widget that is checked.
+    expect(result.getForm().getCheckBox('Agree').isChecked()).toBe(true);
   });
 
   it('skips dismissed candidate fields', async () => {
@@ -565,5 +571,146 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
   it('skips an XFA radio field when value is an empty string', async () => {
     const doc = makeDoc([{ name: 'agree', type: 'radio', value: '' }], 'xfa-hybrid');
     await expect(exportPdf(xfaHybridRadioPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
+  });
+
+  it('exports candidate radio buttons as an AcroForm radio group', async () => {
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf('plain-radio-candidate.pdf', plainBytes);
+
+    const radioA: CandidateField = {
+      id: 'r1',
+      type: 'radio',
+      label: 'Choice',
+      displayName: 'Choice',
+      placement: { x: 50, y: 700, width: 16, height: 16 },
+      value: 'yes',
+      confidence: 'high',
+      dismissed: false,
+      radioValue: 'yes',
+      groupName: 'Answer',
+    };
+    const radioB: CandidateField = {
+      id: 'r2',
+      type: 'radio',
+      label: 'Choice',
+      displayName: 'Choice',
+      placement: { x: 50, y: 670, width: 16, height: 16 },
+      value: 'yes',
+      confidence: 'high',
+      dismissed: false,
+      radioValue: 'no',
+      groupName: 'Answer',
+    };
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-radio-candidate.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [radioA, radioB],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const bytes = await exportPdf(plainPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+    // One radio group with two options; 'yes' is selected.
+    const rg = result.getForm().getRadioGroup('Answer');
+    expect(rg.getOptions()).toEqual(expect.arrayContaining(['yes', 'no']));
+    expect(rg.getSelected()).toBe('yes');
+  });
+
+  it('deduplicates candidate field names with a numeric suffix', async () => {
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf('plain-dedup-candidate.pdf', plainBytes);
+
+    const makeCandidate = (id: string, y: number): CandidateField => ({
+      id,
+      type: 'text',
+      label: 'Name',
+      displayName: 'Name',
+      placement: { x: 50, y, width: 200, height: 20 },
+      value: id,
+      confidence: 'high',
+      dismissed: false,
+    });
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-dedup-candidate.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [makeCandidate('c1', 700), makeCandidate('c2', 660)],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const bytes = await exportPdf(plainPath, doc);
+    const result = await PDFDocument.load(bytes);
+    // Both candidates share displayName 'Name'; second gets 'Name_1'.
+    const fields = result.getForm().getFields();
+    expect(fields).toHaveLength(2);
+    const names = fields.map((f) => f.getName()).sort();
+    expect(names).toEqual(['Name', 'Name_1']);
+  });
+
+  it('falls back to drawCandidateValues for XFA PDFs with candidate fields', async () => {
+    // For XFA PDFs we stamp text rather than creating AcroForm widgets, to avoid
+    // calling getForm() before the XFA branch captures the /XFA entry.
+    const candidate: CandidateField = {
+      id: 'cx1',
+      type: 'text',
+      label: 'Note',
+      displayName: 'Note',
+      placement: { x: 50, y: 700, width: 200, height: 20 },
+      value: 'hello',
+      confidence: 'high',
+      dismissed: false,
+    };
+    const doc = makeDoc([{ name: 'agree', type: 'checkbox', value: true }], 'xfa-hybrid', [
+      candidate,
+    ]);
+    const bytes = await exportPdf(xfaHybridRadioPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBeGreaterThan(0);
+    // The candidate is not added as a separate AcroForm field on the XFA path.
+    const fieldNames = result
+      .getForm()
+      .getFields()
+      .map((f) => f.getName());
+    expect(fieldNames).not.toContain('Note');
   });
 });

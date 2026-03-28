@@ -11,10 +11,10 @@ export type FieldType = 'text' | 'textarea' | 'checkbox' | 'radio' | 'select';
  * Determines which extractors run and whether fields are editable or exportable.
  *
  * acroform   — has AcroForm fields (pdf-lib); editable + exportable to PDF
- * vector     — digitally created, no AcroForm; editable via candidateFields, not exportable
- * raster     — scanned image only; no fields auto-detected; fields can be added manually
- * raster+ocr — scanned image with embedded OCR text layer; fields can be added manually
- * hybrid     — images + vector paths; editable via candidateFields, not exportable
+ * vector     — digitally created, no AcroForm; editable via candidateFields; exported as AcroForm widgets
+ * raster     — scanned image only; fields added manually; exported as AcroForm widgets
+ * raster+ocr — scanned image with embedded OCR text layer; fields added manually; exported as AcroForm widgets
+ * hybrid     — images + vector paths; editable via candidateFields; exported as AcroForm widgets
  */
 export type PageType = 'acroform' | 'vector' | 'raster' | 'raster+ocr' | 'hybrid';
 
@@ -33,16 +33,16 @@ export type CandidateFieldConfidence = 'high' | 'medium' | 'low';
 
 /**
  * A form field candidate detected from vector paths (lines, rectangles) in the
- * page content stream. Used for non-AcroForm PDFs where "write here" areas are
- * drawn rather than declared as AcroForm widgets.
+ * page content stream, or added manually by the user. Used for non-AcroForm PDFs
+ * where "write here" areas are drawn rather than declared as AcroForm widgets.
  *
- * CandidateFields have no AcroForm backing — on export, values are stamped
- * as drawn text directly onto the page rather than written into AcroForm widgets.
+ * On export, candidates are written as real AcroForm widget annotations (not
+ * stamped text) for non-XFA PDFs.
  */
 export interface CandidateField {
   /** Stable UUID generated at analysis time. */
   id: string;
-  type: 'text' | 'textarea' | 'checkbox';
+  type: 'text' | 'textarea' | 'checkbox' | 'radio';
   /** Derived from the nearest TextBlock above or to the left of the path. Empty if none found. */
   label: string;
   displayName: string;
@@ -54,6 +54,17 @@ export interface CandidateField {
   dismissed: boolean;
   /** Text alignment for the input field, set by the user. */
   textAlign?: 'left' | 'center' | 'right' | 'justify';
+  /**
+   * For type='radio': the on-value this specific button represents (e.g. 'yes', 'option1').
+   * Stored as the selected value in `value` across all buttons in the same group.
+   */
+  radioValue?: string;
+  /**
+   * For type='radio': links multiple radio buttons into one AcroForm group on export.
+   * All undismissed radio candidates on the same page sharing a groupName become
+   * one PDFRadioGroup. Also used as the AcroForm field name (sanitized).
+   */
+  groupName?: string;
 }
 
 export interface Placement {

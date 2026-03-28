@@ -12,7 +12,7 @@ import {
   TextAlignment,
   rgb,
 } from 'pdf-lib';
-import type { FpdfDocument, PdfKind } from './types.js';
+import type { CandidateField, FpdfDocument, PdfKind } from './types.js';
 import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from './analyzer.js';
 
 /**
@@ -95,7 +95,14 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     }
   }
 
-  await drawCandidateValues(pdfDoc, doc);
+  // Candidate fields: create real AcroForm widgets for non-XFA PDFs.
+  // For XFA PDFs, fall back to stamped text — calling getForm() before the XFA
+  // branch captures /XFA would strip it from the in-memory AcroForm dict.
+  if (isXfa) {
+    await drawCandidateValues(pdfDoc, doc);
+  } else {
+    createCandidateWidgets(pdfDoc, doc);
+  }
 
   if (isXfa && xfaInfo !== null) {
     // ── XFA hybrid PDF ───────────────────────────────────────────────────────
@@ -198,6 +205,86 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
           color: COLOR,
           maxWidth: width - TEXT_PADDING * 2,
         });
+      }
+    }
+  }
+}
+
+/**
+ * Sanitize a display name into a valid AcroForm field name and deduplicate it
+ * within the set of already-used names by appending _1, _2, … as needed.
+ */
+function uniqueFieldName(base: string, used: Set<string>): string {
+  const safe = base.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'Field';
+  if (!used.has(safe)) {
+    used.add(safe);
+    return safe;
+  }
+  for (let i = 1; ; i++) {
+    const candidate = `${safe}_${String(i)}`;
+    if (!used.has(candidate)) {
+      used.add(candidate);
+      return candidate;
+    }
+  }
+}
+
+/**
+ * Create real AcroForm widget annotations for all non-dismissed candidate fields.
+ * Used for non-XFA PDFs (vector, raster, hybrid) where candidates have no
+ * existing AcroForm backing. Radio candidates sharing a groupName are grouped
+ * into a single PDFRadioGroup.
+ */
+function createCandidateWidgets(pdfDoc: PDFDocument, doc: FpdfDocument): void {
+  const hasCandidates = doc.pages.some((p) => p.candidateFields.some((c) => !c.dismissed));
+  if (!hasCandidates) return;
+
+  const form = pdfDoc.getForm();
+  const usedNames = new Set<string>();
+
+  // Collect radio candidates grouped by groupName first so we can create each
+  // PDFRadioGroup once and add all its widgets in a single pass.
+  const radioGroups = new Map<string, { candidate: CandidateField; pageIdx: number }[]>();
+  for (const docPage of doc.pages) {
+    for (const c of docPage.candidateFields) {
+      if (c.dismissed || c.type !== 'radio') continue;
+      const key = c.groupName ?? c.id;
+      if (!radioGroups.has(key)) radioGroups.set(key, []);
+      const group = radioGroups.get(key);
+      if (group) group.push({ candidate: c, pageIdx: docPage.pageNumber - 1 });
+    }
+  }
+
+  for (const [groupKey, buttons] of radioGroups) {
+    const name = uniqueFieldName(groupKey, usedNames);
+    const rg = form.createRadioGroup(name);
+    let selectedOption: string | undefined;
+    for (const { candidate: c, pageIdx } of buttons) {
+      const optVal = c.radioValue ?? 'option';
+      rg.addOptionToPage(optVal, pdfDoc.getPage(pageIdx), c.placement);
+      if (typeof c.value === 'string' && c.value === c.radioValue) selectedOption = optVal;
+    }
+    if (selectedOption !== undefined) rg.select(selectedOption);
+  }
+
+  // Text, textarea, and checkbox candidates — processed per page in order.
+  for (const docPage of doc.pages) {
+    const page = pdfDoc.getPage(docPage.pageNumber - 1);
+    for (const c of docPage.candidateFields) {
+      if (c.dismissed || c.type === 'radio') continue;
+      const name = uniqueFieldName(c.displayName || c.label || 'Field', usedNames);
+      const { x, y, width, height } = c.placement;
+      if (c.type === 'checkbox') {
+        const cb = form.createCheckBox(name);
+        cb.addToPage(page, { x, y, width, height });
+        if (c.value === true) cb.check();
+      } else {
+        const tf = form.createTextField(name);
+        if (c.type === 'textarea') tf.enableMultiline();
+        tf.addToPage(page, { x, y, width, height });
+        if (typeof c.value === 'string' && c.value !== '') tf.setText(c.value);
+        const align = toTextAlignment(c.textAlign);
+        if (align !== undefined) tf.setAlignment(align);
       }
     }
   }

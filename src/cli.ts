@@ -1,5 +1,9 @@
 #!/usr/bin/env node
-import { writeFile, readFile } from 'node:fs/promises';
+import { writeFile, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import * as readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { PDFDocument } from 'pdf-lib';
 import { exportPdf } from './exporter.js';
 import * as path from 'node:path';
@@ -262,6 +266,55 @@ export function buildProgram(): Command {
       run().catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error(msg);
+        process.exit(1);
+      });
+    });
+
+  // Note: `scripts/fpdf clean` intercepts this command before Node starts so it
+  // works even when node_modules/dist are missing.  This registration keeps
+  // `fpdf clean` available when invoking dist/cli.js directly (e.g. in tests).
+  program
+    .command('clean')
+    .description('Remove node_modules/, dist/, and optionally the fnm-managed Node.js')
+    .action(() => {
+      const run = async (): Promise<void> => {
+        const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+        const nodeModulesPath = path.join(rootDir, 'node_modules');
+        if (existsSync(nodeModulesPath)) {
+          process.stderr.write('[fpdf] Removing node_modules…\n');
+          await rm(nodeModulesPath, { recursive: true, force: true });
+        }
+
+        const distPath = path.join(rootDir, 'dist');
+        if (existsSync(distPath)) {
+          process.stderr.write('[fpdf] Removing dist…\n');
+          await rm(distPath, { recursive: true, force: true });
+        }
+
+        if (process.execPath.includes('fnm')) {
+          const nodeVer = process.version;
+          const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+          await new Promise<void>((resolve) => {
+            rl.question(`[fpdf] Also remove fnm-managed Node.js ${nodeVer}? [Y/n] `, (answer) => {
+              rl.close();
+              if (!/^[Nn]/u.test(answer)) {
+                const result = spawnSync('fnm', ['uninstall', nodeVer], { stdio: 'inherit' });
+                if (result.status === 0) {
+                  process.stderr.write(`[fpdf] Node.js ${nodeVer} removed.\n`);
+                } else {
+                  process.stderr.write('[fpdf] fnm uninstall failed — check output above.\n');
+                }
+              }
+              resolve();
+            });
+          });
+        }
+
+        process.stderr.write('[fpdf] Done.\n');
+      };
+      run().catch((err: unknown) => {
+        logger.error(err instanceof Error ? err.message : String(err));
         process.exit(1);
       });
     });

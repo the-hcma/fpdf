@@ -1,14 +1,243 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
+root_dir="$(dirname "$script_dir")"
+readonly root_dir
 
-# Rebuild if any source file is newer than the compiled entry point.
-if [ ! -f "$ROOT_DIR/dist/cli.js" ] || \
-   find "$ROOT_DIR/src" -name '*.ts' -newer "$ROOT_DIR/dist/cli.js" | grep -q .; then
-  echo "[fpdf] source changed — rebuilding…" >&2
-  npm --prefix "$ROOT_DIR" run build >&2
+# Color only when stderr is a terminal.
+if [ -t 2 ]; then
+  readonly q=$'\033[0;36m'  # cyan for questions
+  readonly r=$'\033[0m'     # reset
+else
+  readonly q=''
+  readonly r=''
 fi
 
-exec node "$ROOT_DIR/dist/cli.js" "$@"
+# Load fnm into the current shell (makes fnm-managed node visible in PATH).
+# Guard against growing PATH on repeated calls.
+_reload_fnm() {
+  if [[ ":$PATH:" != *":$HOME/.local/share/fnm:"* && ":$PATH:" != *":$HOME/.fnm:"* ]]; then
+    export PATH="$HOME/.local/share/fnm:$HOME/.fnm:$PATH"
+  fi
+  if command -v fnm &>/dev/null; then
+    eval "$(fnm env --shell bash)"
+  fi
+}
+
+# Install Node.js via the system package manager.
+_node_install_sys() {
+  if command -v brew &>/dev/null; then
+    brew install node >&2
+  elif command -v apt-get &>/dev/null; then
+    sudo apt-get install -y nodejs >&2
+  elif command -v dnf &>/dev/null; then
+    sudo dnf install -y nodejs >&2
+  elif command -v yum &>/dev/null; then
+    sudo yum install -y nodejs >&2
+  elif command -v pacman &>/dev/null; then
+    sudo pacman -S --noconfirm nodejs npm >&2
+  elif command -v zypper &>/dev/null; then
+    sudo zypper install -y nodejs20 >&2
+  elif command -v apk &>/dev/null; then
+    sudo apk add nodejs npm >&2
+  fi
+}
+
+# Install (or update) Node.js via fnm. Installs fnm itself if not present.
+_node_install_fnm() {
+  if ! command -v fnm &>/dev/null; then
+    echo "[fpdf] Installing fnm…" >&2
+    curl -fsSL https://fnm.vercel.app/install | bash >&2
+    export PATH="$HOME/.local/share/fnm:$HOME/.fnm:$PATH"
+  fi
+  if command -v fnm &>/dev/null; then
+    eval "$(fnm env --shell bash)"
+    fnm install --lts >&2
+    fnm use --lts >&2
+    echo "[fpdf] Node.js $(node --version) installed via fnm." >&2
+  else
+    echo "[fpdf] fnm installed but not in PATH yet. Open a new shell and run:" >&2
+    echo "       fnm install --lts && fnm use --lts" >&2
+  fi
+}
+
+# Remove node_modules, dist, and optionally the fnm-managed Node.js.
+_fpdf_clean() {
+  _reload_fnm
+
+  if [ -d "$root_dir/node_modules" ]; then
+    echo "[fpdf] Removing node_modules…" >&2
+    rm -rf "$root_dir/node_modules"
+  fi
+  if [ -d "$root_dir/dist" ]; then
+    echo "[fpdf] Removing dist…" >&2
+    rm -rf "$root_dir/dist"
+  fi
+
+  local node_path
+  node_path=$(command -v node 2>/dev/null || true)
+  if [[ -n "$node_path" && "$node_path" == *"fnm"* ]] && command -v fnm &>/dev/null; then
+    local node_ver
+    node_ver=$(node --version)
+    printf '%s[fpdf] Also remove fnm-managed Node.js %s? [Y/n] %s' "$q" "$node_ver" "$r" >&2
+    read -r reply || { echo >&2; return; }
+    if [[ ! "$reply" =~ ^[Nn] ]]; then
+      fnm uninstall "$node_ver" >&2
+      echo "[fpdf] Node.js $node_ver removed." >&2
+    fi
+  fi
+  echo "[fpdf] Done." >&2
+}
+
+# Handle built-in script flags before any dependency checks.
+case "${1:-}" in
+  clean)
+    # Always handled in bash — clean must work regardless of node/node_modules state.
+    _reload_fnm
+    _fpdf_clean
+    exit 0
+    ;;
+esac
+
+# Show a numbered install/update menu and run the chosen option.
+# When allow_skip=1, the last option is "continue anyway" which sets _fpdf_node_skip=1.
+# When allow_skip=0, the last option pauses until the user signals they are ready.
+_fpdf_node_skip=0
+_offer_node_menu() {
+  local -r allow_skip="${1:-0}"
+
+  local sys_label='' sys_ver='' sys_warn=''
+  if command -v brew &>/dev/null; then
+    sys_label='brew install node'
+    sys_ver=$(brew info node 2>/dev/null | grep -oE 'stable [0-9]+\.[0-9]+' | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  elif command -v apt-get &>/dev/null; then
+    sys_label='sudo apt-get install -y nodejs'
+    sys_ver=$(apt-cache show nodejs 2>/dev/null | awk '/^Version:/{print $2; exit}' | grep -oE '^[0-9]+\.[0-9]+')
+  elif command -v dnf &>/dev/null; then
+    sys_label='sudo dnf install -y nodejs'
+    sys_ver=$(dnf info nodejs 2>/dev/null | awk '/^Version/{print $3; exit}' | grep -oE '^[0-9]+\.[0-9]+')
+  elif command -v yum &>/dev/null; then
+    sys_label='sudo yum install -y nodejs'
+    sys_ver=$(yum info nodejs 2>/dev/null | awk '/^Version/{print $3; exit}' | grep -oE '^[0-9]+\.[0-9]+')
+  elif command -v pacman &>/dev/null; then
+    sys_label='sudo pacman -S --noconfirm nodejs npm'
+    sys_ver=$(pacman -Si nodejs 2>/dev/null | awk '/^Version/{print $3; exit}' | grep -oE '^[0-9]+\.[0-9]+')
+  elif command -v zypper &>/dev/null; then
+    sys_label='sudo zypper install -y nodejs20'
+    sys_ver=$(zypper info nodejs20 2>/dev/null | awk '/^Version/{print $3; exit}' | grep -oE '^[0-9]+\.[0-9]+')
+  elif command -v apk &>/dev/null; then
+    sys_label='sudo apk add nodejs npm'
+    sys_ver=$(apk info nodejs 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 | grep -oE '^[0-9]+\.[0-9]+')
+  fi
+  # If the package manager ships a version below the minimum, drop it as an option.
+  if [[ -n "$sys_ver" ]]; then
+    local sys_major
+    sys_major=$(echo "$sys_ver" | cut -d. -f1)
+    if [[ "$sys_major" -lt "$_min_major" ]]; then
+      echo "[fpdf] Your package manager ships nodejs v${sys_ver}, which is below the required v${_min_major}." >&2
+      sys_label=''
+    else
+      sys_warn="  (v${sys_ver})"
+    fi
+  fi
+
+  local n=0 opt_sys=0 opt_fnm=0 opt_last=0
+  echo "[fpdf] How would you like to install Node.js (>= ${_min_major})?" >&2
+  if [[ -n "$sys_label" ]]; then
+    n=$(( n + 1 )); opt_sys=$n
+    echo "  $n) $sys_label${sys_warn}" >&2
+  fi
+  n=$(( n + 1 )); opt_fnm=$n
+  echo "  $n) fnm — local, no sudo, installs latest LTS  (~/.local/share/fnm)" >&2
+  n=$(( n + 1 )); opt_last=$n
+  if [[ "$allow_skip" == '1' ]]; then
+    echo "  $n) Continue with current version" >&2
+  else
+    echo "  $n) I'll do it myself" >&2
+  fi
+  echo "  0) Exit" >&2
+
+  printf '%s[fpdf] Choice [1]: %s' "$q" "$r" >&2
+  read -r reply || { echo >&2; exit 1; }
+  [[ -z "$reply" ]] && reply=1
+
+  if [[ "$reply" == '0' ]]; then
+    exit 0
+  elif [[ "$opt_sys" != '0' && "$reply" == "$opt_sys" ]]; then
+    _node_install_sys
+  elif [[ "$reply" == "$opt_fnm" ]]; then
+    _node_install_fnm
+  elif [[ "$reply" == "$opt_last" && "$allow_skip" == '1' ]]; then
+    _fpdf_node_skip=1
+  elif [[ "$reply" == "$opt_last" ]]; then
+    printf '%s[fpdf] Press Enter when Node.js is installed and ready…%s' "$q" "$r" >&2
+    read -r _ || true
+  else
+    echo "[fpdf] Invalid choice." >&2
+  fi
+}
+
+# Always try to load fnm first — picks up any previous local install.
+_reload_fnm
+
+# Read the minimum required Node.js major version from package.json.
+# Done with grep so it works even before node is installed.
+_min_major=$(grep '"node"' "$root_dir/package.json" | grep -oE '[0-9]+' | head -1)
+_min_major="${_min_major:-20}"
+readonly _min_major
+
+# Check that node is available.
+while ! command -v node &>/dev/null; do
+  echo "[fpdf] 'node' is not installed (required: >= ${_min_major})." >&2
+  _offer_node_menu 0
+  _reload_fnm
+done
+
+# Check that node_modules exists (npm install has been run).
+while [ ! -d "$root_dir/node_modules" ]; do
+  echo "[fpdf] Dependencies not installed." >&2
+  printf '%s[fpdf] Run '\''npm install'\'' now? [Y/n] %s' "$q" "$r" >&2
+  read -r reply || { echo >&2; exit 1; }
+  [[ "$reply" =~ ^[Nn] ]] && exit 0
+  echo "[fpdf] Installing dependencies…" >&2
+  if npm --prefix "$root_dir" install >&2; then
+    echo "[fpdf] Dependencies installed." >&2
+  else
+    echo "[fpdf] Installation failed — check the output above." >&2
+  fi
+done
+
+# Warn if the running node version is below the minimum required.
+_node_major=$(node --version | tr -d 'v' | cut -d. -f1)
+while [[ "$_fpdf_node_skip" == '0' && "$_node_major" -lt "$_min_major" ]]; do
+  echo "[fpdf] Node $(node --version) is below the required >=v${_min_major}." >&2
+  _offer_node_menu 1
+  _reload_fnm
+  _node_major=$(node --version | tr -d 'v' | cut -d. -f1)
+done
+
+# Warn if node_modules is out of sync with package-lock.json.
+if [ "$root_dir/package-lock.json" -nt "$root_dir/node_modules" ]; then
+  echo "[fpdf] Dependencies may be out of date (package-lock.json has changed since last install)." >&2
+  printf '%s[fpdf] Run npm install to update? [Y/n] %s' "$q" "$r" >&2
+  read -r reply || { echo >&2; exit 1; }
+  if [[ ! "$reply" =~ ^[Nn] ]]; then
+    echo "[fpdf] Updating dependencies…" >&2
+    if npm --prefix "$root_dir" install >&2; then
+      echo "[fpdf] Dependencies updated." >&2
+    else
+      echo "[fpdf] Update failed — check the output above." >&2
+    fi
+  fi
+fi
+
+# Rebuild if any source file is newer than the compiled entry point.
+if [ ! -f "$root_dir/dist/cli.js" ] || \
+   find "$root_dir/src" -name '*.ts' -newer "$root_dir/dist/cli.js" | grep -q .; then
+  echo "[fpdf] source changed — rebuilding…" >&2
+  npm --prefix "$root_dir" run build >&2
+fi
+
+exec node "$root_dir/dist/cli.js" "$@"

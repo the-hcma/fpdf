@@ -851,6 +851,38 @@ function evaluateBox(
     return; // instruction/content block, not a field
   }
 
+  // Multi-label horizontal-span filter: if two or more text blocks each have at
+  // least 10% of their own area overlapping the box, and their combined clipped
+  // horizontal span covers ≥ 60% of the box width, this is a multi-column header
+  // or labelled section — not a fillable field.
+  // Catches patterns like "[DRUG NAME & STRENGTH]   [NDC]" printed at the top
+  // border of a wide rectangle where each label straddles the edge and therefore
+  // fails findInsideText's 50% threshold, leaving the full box as a candidate
+  // that overlays the printed text.  Requiring ≥ 10% area overlap avoids counting
+  // adjacent labels in neighbouring cells that barely clip the box boundary.
+  {
+    let overlapCount = 0;
+    let combinedHSpan = 0;
+    for (const b of textBlocks) {
+      const bHOv = Math.max(
+        0,
+        Math.min(b.placement.x + b.placement.width, x + w) - Math.max(b.placement.x, x),
+      );
+      const bVOv = Math.max(
+        0,
+        Math.min(b.placement.y + b.placement.height, y + h) - Math.max(b.placement.y, y),
+      );
+      if (bHOv < 1 || bVOv < 1) continue;
+      const bArea = b.placement.width * b.placement.height;
+      if (bArea <= 0 || (bHOv * bVOv) / bArea < 0.1) continue; // require ≥10% of text-block area
+      overlapCount += 1;
+      combinedHSpan += bHOv;
+    }
+    if (overlapCount >= 2 && w > 0 && combinedHSpan / w > 0.6) {
+      return; // multi-label header / content area
+    }
+  }
+
   // Filter out inside blocks that are clearly section headers: font size larger
   // than the cell height means it's a title/header bar, not a field label.
   const labelBlocks = insideBlocks.filter((b) => b.fontSize <= h * 1.1);
@@ -1466,6 +1498,76 @@ export function computePdfKind(hasXfa: boolean, hasAcroFormFields: boolean): Pdf
 }
 
 /**
+ * Returns the fraction of `inner`'s area that is covered by `outer`.
+ * Both placements use PDF point space (bottom-left origin).
+ * Result is in [0, 1]: 1.0 = inner is fully contained, 0 = no overlap.
+ */
+function overlapFraction(outer: Placement, inner: Placement): number {
+  const ox = Math.max(outer.x, inner.x);
+  const oy = Math.max(outer.y, inner.y);
+  const ox2 = Math.min(outer.x + outer.width, inner.x + inner.width);
+  const oy2 = Math.min(outer.y + outer.height, inner.y + inner.height);
+  const intersection = Math.max(0, ox2 - ox) * Math.max(0, oy2 - oy);
+  const innerArea = inner.width * inner.height;
+  return innerArea > 0 ? intersection / innerArea : 0;
+}
+
+/**
+ * Marks candidate fields as `'low'` confidence when they appear to be
+ * decorative container rectangles drawn around other fields rather than
+ * actual fillable areas.
+ *
+ * A candidate is suppressed when its bounding box covers more than 50% of
+ * the area of at least one other field (candidate or AcroForm) on the same
+ * page. This catches the common pattern where a section border — e.g. the
+ * box drawn around a "Male / Female" checkbox group — is incorrectly
+ * detected as a text field on top of the real checkbox widgets.
+ */
+export function suppressContainerCandidates(
+  candidates: CandidateField[],
+  acroFields: { placement: Placement }[],
+): void {
+  const CONTAINMENT_THRESHOLD = 0.5;
+  // Higher bar for same-type deduplication to avoid suppressing legitimately
+  // adjacent checkboxes — only fires when one nearly contains the other.
+  const DUPLICATE_THRESHOLD = 0.8;
+  for (const outer of candidates) {
+    if (outer.confidence === 'low') continue;
+    // Container suppression: text/textarea that wraps other fields.
+    if (outer.type === 'text' || outer.type === 'textarea') {
+      // Check other candidate fields
+      for (const inner of candidates) {
+        if (inner === outer) continue;
+        if (overlapFraction(outer.placement, inner.placement) > CONTAINMENT_THRESHOLD) {
+          outer.confidence = 'low';
+          break;
+        }
+      }
+      if (outer.confidence === 'low') continue;
+      // Check AcroForm fields on the same page (hybrid pages)
+      for (const inner of acroFields) {
+        if (overlapFraction(outer.placement, inner.placement) > CONTAINMENT_THRESHOLD) {
+          outer.confidence = 'low';
+          break;
+        }
+      }
+    }
+    if (outer.confidence === 'low') continue;
+    // Duplicate suppression: same-type candidates where the outer nearly contains
+    // the inner — handles the case where the same shape is detected twice at
+    // slightly different bounds (e.g. a checkbox detected as both its stroke rect
+    // and its fill rect).
+    for (const inner of candidates) {
+      if (inner === outer || inner.type !== outer.type) continue;
+      if (overlapFraction(outer.placement, inner.placement) > DUPLICATE_THRESHOLD) {
+        outer.confidence = 'low';
+        break;
+      }
+    }
+  }
+}
+
+/**
  * Analyze a PDF file and extract all AcroForm fields into an FpdfDocument.
  *
  * @param filePath Absolute or relative path to the PDF file.
@@ -1634,6 +1736,7 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
             textBlocks,
             width,
           );
+          suppressContainerCandidates(candidateFields, pageFields.get(p) ?? []);
         }
       } catch (err) {
         // best-effort — leave pageType/textBlocks/candidateFields at defaults

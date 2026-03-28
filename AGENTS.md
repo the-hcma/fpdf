@@ -93,6 +93,27 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ---
 
+## Shell Scripts
+
+- **`shellcheck`** is mandatory for all shell scripts. CI runs `shellcheck scripts/fpdf` on every push.
+- **`readonly`** must be used for every script-level variable that is assigned once and never modified. Declare and assign separately to avoid masking exit codes (SC2155):
+  ```bash
+  var="$(some_command)"
+  readonly var
+  ```
+- **Non-exported variables must be lowercase.** Uppercase is reserved for exported environment variables (`export FOO=bar`). Script-level constants, loop variables, and function locals all use `snake_case`.
+- **Use `local` for all function-scoped variables.** For parameters or literal assignments that won't change, prefer `local -r`:
+  ```bash
+  my_func() {
+    local -r mode="${1:-default}"   # parameter — safe to combine
+    local result                    # command substitution — declare separately
+    result=$(some_command)          # assign after to preserve exit code
+  }
+  ```
+- Do not use `local -r var=$(cmd)` — shellcheck SC2155 flags it because `local` masks the command's exit code.
+
+---
+
 ## Security
 
 - Never log, store, or transmit the raw contents of user PDF files beyond what is required to serve the local web UI.

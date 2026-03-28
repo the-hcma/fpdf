@@ -88,9 +88,9 @@ describe('CLI program structure', () => {
     expect(opt?.defaultValue).toBe(false);
   });
 
-  it('has four top-level commands and no more', () => {
+  it('has five top-level commands and no more', () => {
     const program = buildProgram();
-    expect(program.commands).toHaveLength(4);
+    expect(program.commands).toHaveLength(5);
   });
 
   describe('export command action', () => {

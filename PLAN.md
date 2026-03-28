@@ -166,7 +166,7 @@ fpdf/
   - `"medium"`: correct aspect ratio but no label found nearby, or label found but geometry is ambiguous
   - `"low"`: geometry looks like a structural rule or border (full-width line, page-margin rect, etc.) but wasn't filtered out
 - `dismissed: true` means the user has explicitly discarded this candidate — the UI hides it; it remains in the JSON so re-analysis doesn't resurface it
-- `candidateFields` are **never** written back to the PDF by `fpdf export` (no AcroForm backing); their `value`s are only saved in `.fpdf.json`
+- `candidateFields` are exported as real AcroForm widget annotations by `fpdf export` for non-XFA PDFs (M11.2); for XFA PDFs their values are stamped as drawn text instead
 - `candidateFields` is always present (never omitted), but will be `[]` for pure AcroForm PDFs where all fields are already in `fields`
 
 ---
@@ -221,10 +221,10 @@ Before running any extractor, each page is classified by scanning `pdfjsPage.get
 | `pageType` | `hasImages` | `hasPaths` | `hasText` | Extractors that run | Fields editable? | Exportable to PDF? |
 |---|---|---|---|---|---|---|
 | `acroform` | any | any | any | AcroForm (pdf-lib) + textBlocks | ✅ Now | ✅ Now (`fpdf export`) |
-| `vector` | ✗ | ✓ | ✓ | textBlocks + candidateFields (vector path) | 🔲 M11 (values saved to `.fpdf.json` only) | ❌ No AcroForm backing |
-| `raster` | ✓ | ✗ | ✗ | none — scanned image only | ❌ No fields detected | ❌ |
-| `raster+ocr` | ✓ | ✗ | ✓ | textBlocks only (hidden OCR text layer) | ❌ No fields detected | ❌ |
-| `hybrid` | ✓ | ✓ | ✓ | textBlocks + candidateFields | 🔲 M11 (values saved to `.fpdf.json` only) | ❌ No AcroForm backing |
+| `vector` | ✗ | ✓ | ✓ | textBlocks + candidateFields (vector path) | ✅ | ✅ AcroForm widgets (M11.2) |
+| `raster` | ✓ | ✗ | ✗ | none — fields added manually via right-click | ✅ manual | ✅ AcroForm widgets (M11.2) |
+| `raster+ocr` | ✓ | ✗ | ✓ | textBlocks only (hidden OCR text layer); fields added manually | ✅ manual | ✅ AcroForm widgets (M11.2) |
+| `hybrid` | ✓ | ✓ | ✓ | textBlocks + candidateFields | ✅ | ✅ AcroForm widgets (M11.2) |
 
 Detection (single pass over `fnArray`):
 ```typescript
@@ -383,8 +383,11 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | CLI.2 | `03-24-feat_add_--fresh_flag_to_fpdf_fill_to_force_re-analysis` | `--fresh` flag for `fpdf fill`: skips loading any existing `.fpdf.json` and re-runs `analyzePdf()` unconditionally; top-level `--help` now shows all subcommand options inline (built dynamically from registered commands) | ✅ |
 | CI | `03-23-chore_ci_workflow` | GitHub Actions CI: `npm run check` + `npm test` on every PR and push to `main`; Node 24; v8 branch coverage threshold set to 73% (Node 22/24 measure ~2% lower than Node 25) | ✅ |
 | CI.1 | `03-23-fix_ci_branch_coverage` | Fix CI branch coverage regression: add tests for XFA radio translation, `/filled-pdf` route, WS write-error path, boolean-to-text fallback, transiently-absent JSON file; isolate watcher race condition in test suite | ✅ |
-| CI.2 | `03-24-test_increase_branch_coverage_to_80_` | Increase branch coverage from 74% → 80% (macOS): add tests for `debug-export` command, radio migration path, `POST /regenerate-acroform`, SPA catch-all route, select/dropdown fields in regenerator, textarea, unchecked checkbox, radio deduplication | 🔲 |
-| CI.3 | `03-24-chore_apply_graphite-recommended_ci_trigger_config` | Apply Graphite-recommended CI trigger config: explicit `types: [opened, reopened, synchronize]` + `branches-ignore: ['**/graphite-base/**']` to prevent merge-queue draft PRs from blocking CI | 🔲 |
-| CI.4 | `03-24-chore_add_new-pr_checklist_rule_to_agents.md` | Add new-PR checklist rule to AGENTS.md: confirm current PR is merged or all CI checks pass before starting new work | 🔲 |
-| 10.10 | — | Section container heuristic: Phase 1 container-cell suppression (wide H-line pair cells that contain narrower cells at the same y-range are filtered out); `findLabelBelow` for fields whose labels sit below the fill-in line; Phase 3 stroked-rect container detection (large outer rectangles that enclose ≥ 2 H-lines are treated as structural containers, not fields; H-lines inside are emitted as individual fields with below-label search); Cigna pharmacy claim form added as integration test fixture | 🔲 |
-| 11 | — | UI renders `candidateFields` in a distinct style per confidence level (dashed border, muted background); each widget has a dismiss × button that sets `dismissed: true` and saves; toolbar toggle shows/hides dismissed candidates | 🔲 |
+| CI.2 | `03-24-test_increase_branch_coverage_to_80_` | Increase branch coverage from 74% → 80% (macOS): add tests for `debug-export` command, radio migration path, `POST /regenerate-acroform`, SPA catch-all route, select/dropdown fields in regenerator, textarea, unchecked checkbox, radio deduplication | ✅ |
+| CI.3 | `03-24-chore_apply_graphite-recommended_ci_trigger_config` | Apply Graphite-recommended CI trigger config: explicit `types: [opened, reopened, synchronize]` + `branches-ignore: ['**/graphite-base/**']` to prevent merge-queue draft PRs from blocking CI | ✅ |
+| CI.4 | `03-24-chore_add_new-pr_checklist_rule_to_agents.md` | Add new-PR checklist rule to AGENTS.md: confirm current PR is merged or all CI checks pass before starting new work | ✅ |
+| 10.10 | `03-26-feat_section-container-heuristic` | Section container heuristic: Phase 1 container-cell suppression (wide H-line pair cells that contain narrower cells at the same y-range are filtered out); `findLabelBelow` for fields whose labels sit below the fill-in line; Phase 3 stroked-rect container detection (large outer rectangles that enclose ≥ 2 H-lines are treated as structural containers, not fields; H-lines inside are emitted as individual fields with below-label search); Cigna pharmacy claim form added as integration test fixture | 🔲 PR #116 |
+| 11 | `candidate-edit/move-resize` | Edit-layout mode for candidate fields: click-to-select (outline + resize handles); drag to move; 8-handle resize; snap guide; `EditLayout` button in toolbar | 🔲 PR #117 |
+| 11.1 | `candidate-edit/draw-field` | Full edit-layout UX: draw new fields by right-click → "Add field here"; click-to-enter-edit / second-click-to-type; Delete key removes candidate; cascading context menu (duplicate, name, text alignment, delete); hover tooltip; font auto-shrinks to fit; export respects text alignment; scanned PDFs supported (right-click-to-add works on raster pages); radio/checkbox clicks not intercepted | 🔲 PR #118 |
+| 11.2 | — | AcroForm export for candidate fields: replace text-stamp export with real AcroForm widget creation (`form.createTextField` / `createCheckBox`); `uniqueFieldName()` sanitizes `displayName` with dedup suffix; text alignment preserved via `setAlignment()`; XFA PDFs keep stamped-text fallback | 🔲 |
+| 11.3 | — | Radio button support for candidate fields: add `type: 'radio'` + `radioValue?` + `groupName?` to `CandidateField`; "Add field here" becomes a type-picker submenu (text / textarea / checkbox / radio); radio buttons share a group via `groupName`; export creates one `PDFRadioGroup` per group via `addOptionToPage()` | 🔲 |

@@ -78,7 +78,7 @@ fpdf classifies every PDF by its form structure on first open and shows a status
 |---|---|---|---|
 | **AcroForm** | Standard interactive PDF with AcroForm fields | ✅ | ✅ |
 | **XFA + AcroForm** (hybrid) | Has both XFA datasets and AcroForm widgets (e.g. Cigna forms) | ✅ | ✅ |
-| **Pure XFA** | XFA-only; no traditional AcroForm | ⚠️ limited | ⚠️ limited |
+| **Pure XFA** | XFA-only; no traditional AcroForm | ✅ | ✅ — use Regenerate for a universally compatible output |
 | **No AcroForm — vector/hybrid** | Digitally created PDF with draw-in fields (no AcroForm); fields detected from vector paths | ✅ | ✅ text stamped |
 | **No AcroForm — scanned** | Scanned image-only PDF; no auto-detected fields; add fields manually | ✅ manual | ✅ text stamped |
 

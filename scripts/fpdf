@@ -203,6 +203,7 @@ while [ ! -d "$root_dir/node_modules" ]; do
   [[ "$reply" =~ ^[Nn] ]] && exit 0
   echo "[fpdf] Installing dependencies…" >&2
   if npm --prefix "$root_dir" install >&2; then
+    touch "$root_dir/node_modules"
     echo "[fpdf] Dependencies installed." >&2
   else
     echo "[fpdf] Installation failed — check the output above." >&2
@@ -226,6 +227,7 @@ if [ "$root_dir/package-lock.json" -nt "$root_dir/node_modules" ]; then
   if [[ ! "$reply" =~ ^[Nn] ]]; then
     echo "[fpdf] Updating dependencies…" >&2
     if npm --prefix "$root_dir" install >&2; then
+      touch "$root_dir/node_modules"
       echo "[fpdf] Dependencies updated." >&2
     else
       echo "[fpdf] Update failed — check the output above." >&2

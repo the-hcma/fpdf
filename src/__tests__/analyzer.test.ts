@@ -12,6 +12,7 @@ import {
   deriveDisplayName,
   detectPageType,
   detectCandidateFields,
+  suppressContainerCandidates,
   extractOrphanWidgets,
   xfaLeafName,
   getXfaDatasetsInfo,
@@ -1190,6 +1191,60 @@ describe('detectCandidateFields unit', () => {
     );
     expect(result).toHaveLength(1); // not filtered out by coverage
   });
+
+  it('rejects a box where two labels span ≥60% of its width (multi-column header)', () => {
+    // Simulates "DRUG NAME & STRENGTH" (left) + "NDC" (right) printed at the top
+    // border of a wide rectangle — each label straddles the box edge so
+    // findInsideText (50% threshold) misses them.  The multi-label span filter
+    // requires ≥10% of each text block's area to overlap the box AND combined
+    // horizontal span > 60% of box width.
+    // Box: x=10, y=100, w=400, h=20  (PDF coords, bottom-left origin)
+    const textBlocks = [
+      {
+        // Left label: x=15..215 (200pt wide), y=115..125 (10pt tall).
+        // Box top = y=120.  Vertical overlap = 5pt.  Area overlap = 200*5=1000.
+        // Text area = 200*10=2000.  Fraction = 50% ≥ 10% → counted.
+        text: 'DRUG NAME & STRENGTH',
+        placement: { x: 15, y: 115, width: 200, height: 10 },
+        fontSize: 8,
+        fontName: 'TT1',
+      },
+      {
+        // Right label: x=330..380 (50pt), same vertical straddle.
+        // Area overlap = 50*5=250, text area=500, fraction=50% ≥ 10% → counted.
+        text: 'NDC',
+        placement: { x: 330, y: 115, width: 50, height: 10 },
+        fontSize: 8,
+        fontName: 'TT1',
+      },
+    ];
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[10, 100, 400, 20], []] },
+      textBlocks,
+      612,
+    );
+    // count=2, combined clipped h-span=250, 250/400=62.5% > 60% → suppressed.
+    expect(result).toHaveLength(0);
+  });
+
+  it('keeps a field whose single inside label spans less than 60% of box width', () => {
+    // A normal labeled field: "Full Name" (60pt) in a 200pt box → 30% span.
+    const textBlocks = [
+      {
+        text: 'Full Name',
+        placement: { x: 55, y: 682, width: 60, height: 8 },
+        fontSize: 8,
+        fontName: 'TT1',
+      },
+    ];
+    const result = detectCandidateFields(
+      { fnArray: [19, 20], argsArray: [[50, 670, 200, 20], []] },
+      textBlocks,
+      612,
+    );
+    // Only one overlapping block → multi-label filter does not fire.
+    expect(result.length).toBeGreaterThan(0);
+  });
 });
 
 describe('orphan widget extraction (integration)', () => {
@@ -1633,5 +1688,113 @@ describe('XFA integration (Cigna PDF)', () => {
     const info = getXfaDatasetsInfo(pdfDoc);
     expect(info).not.toBeNull();
     expect(info?.xml).toContain('topmostSubform');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// suppressContainerCandidates
+// ---------------------------------------------------------------------------
+
+function makePlacement(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): { placement: { x: number; y: number; width: number; height: number } } {
+  return { placement: { x, y, width, height } };
+}
+
+function makeCandidate(
+  type: 'text' | 'textarea' | 'checkbox' | 'radio',
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  confidence: 'high' | 'medium' | 'low' = 'high',
+): import('../types.js').CandidateField {
+  return {
+    id: crypto.randomUUID(),
+    type,
+    label: '',
+    displayName: 'Field',
+    placement: { x, y, width, height },
+    value: '',
+    confidence,
+    dismissed: false,
+  };
+}
+
+describe('suppressContainerCandidates', () => {
+  it('leaves candidates alone when there is no overlap', () => {
+    const outer = makeCandidate('text', 0, 0, 200, 30);
+    const inner = makeCandidate('checkbox', 300, 0, 12, 12); // completely separate
+    suppressContainerCandidates([outer, inner], []);
+    expect(outer.confidence).toBe('high');
+    expect(inner.confidence).toBe('high');
+  });
+
+  it('demotes a text candidate that fully contains a checkbox candidate', () => {
+    // outer text rect fully encloses inner checkbox
+    const outer = makeCandidate('text', 10, 50, 400, 30);
+    const inner = makeCandidate('checkbox', 60, 55, 12, 12);
+    suppressContainerCandidates([outer, inner], []);
+    expect(outer.confidence).toBe('low');
+    expect(inner.confidence).toBe('high'); // inner kept
+  });
+
+  it('demotes a text candidate containing multiple checkbox candidates', () => {
+    const outer = makeCandidate('text', 10, 50, 400, 30);
+    const cb1 = makeCandidate('checkbox', 60, 55, 12, 12);
+    const cb2 = makeCandidate('checkbox', 200, 55, 12, 12);
+    suppressContainerCandidates([outer, cb1, cb2], []);
+    expect(outer.confidence).toBe('low');
+    expect(cb1.confidence).toBe('high');
+    expect(cb2.confidence).toBe('high');
+  });
+
+  it('does not demote a checkbox/radio candidate even if it overlaps another', () => {
+    // Two side-by-side overlapping checkboxes (58% overlap) — neither should be demoted.
+    // The duplicate threshold is 80%, so this pair is kept as-is.
+    const cb1 = makeCandidate('checkbox', 10, 10, 12, 12);
+    const cb2 = makeCandidate('checkbox', 15, 10, 12, 12);
+    suppressContainerCandidates([cb1, cb2], []);
+    expect(cb1.confidence).toBe('high');
+    expect(cb2.confidence).toBe('high');
+  });
+
+  it('demotes the larger of two near-identical same-type candidates (duplicate detection)', () => {
+    // Simulates the pattern where the same checkbox is detected twice at
+    // slightly different bounds (stroke rect 6×6 wrapping fill rect 5×5).
+    // overlapFraction(6×6, 5×5) = 25/25 = 1.0 → outer demoted.
+    // overlapFraction(5×5, 6×6) = 25/36 ≈ 0.69 < 0.8 → inner kept.
+    const larger = makeCandidate('checkbox', 32, 654, 6, 6);
+    const smaller = makeCandidate('checkbox', 33, 654, 5, 5);
+    suppressContainerCandidates([larger, smaller], []);
+    expect(larger.confidence).toBe('low');
+    expect(smaller.confidence).toBe('high');
+  });
+
+  it('demotes a text candidate containing an AcroForm field', () => {
+    const outer = makeCandidate('text', 10, 50, 400, 30);
+    const acroField = makePlacement(60, 55, 12, 12);
+    suppressContainerCandidates([outer], [acroField]);
+    expect(outer.confidence).toBe('low');
+  });
+
+  it('skips candidates already marked low', () => {
+    const outer = makeCandidate('text', 10, 50, 400, 30, 'low');
+    const inner = makeCandidate('checkbox', 60, 55, 12, 12);
+    // No error, inner stays high
+    suppressContainerCandidates([outer, inner], []);
+    expect(outer.confidence).toBe('low');
+    expect(inner.confidence).toBe('high');
+  });
+
+  it('partial overlap below threshold does not demote', () => {
+    // outer covers only 20% of inner's area
+    const outer = makeCandidate('text', 0, 0, 6, 12); // covers left 6pt of inner
+    const inner = makeCandidate('checkbox', 0, 0, 30, 12); // 6/30 = 20% overlap
+    suppressContainerCandidates([outer, inner], []);
+    expect(outer.confidence).toBe('high');
   });
 });

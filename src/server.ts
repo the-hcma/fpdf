@@ -60,7 +60,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- Filled PDF export ---
   app.get('/filled-pdf', (_req, res) => {
     const run = async (): Promise<void> => {
-      const filled = await exportPdf(currentPdfPath, liveDoc);
+      const filled = await exportPdf(currentPdfPath, liveDoc, { readOnly: true });
       const filename = `${path.basename(currentPdfPath, path.extname(currentPdfPath))}-filled.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
@@ -90,6 +90,24 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- FpdfDocument JSON ---
   app.get('/doc', (_req, res) => {
     res.json(liveDoc);
+  });
+
+  // --- Save candidate fields as an editable AcroForm PDF to disk ---
+  // Produces <name>.fpdf.acroform.pdf alongside the source PDF.  Fields are
+  // left editable so the recipient can fill them in any standard PDF viewer.
+  app.post('/save-acroform', (_req, res) => {
+    const run = async (): Promise<void> => {
+      const filled = await exportPdf(currentPdfPath, liveDoc);
+      const base = currentPdfPath.replace(/\.[^.]+$/, '');
+      const outPath = `${base}.fpdf.acroform.pdf`;
+      await writeFile(outPath, filled);
+      logger.info(`Saved AcroForm PDF → ${outPath}`);
+      res.json({ ok: true, path: outPath });
+    };
+    run().catch((err: unknown) => {
+      logger.error(`save-acroform failed: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: String(err) });
+    });
   });
 
   // --- XFA → AcroForm regeneration ---

@@ -116,7 +116,11 @@ import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from 
  * string (the selected option identity).  Boolean values written by the UI lack
  * the option name and are skipped; see types.ts for the field value model.
  */
-export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uint8Array> {
+export async function exportPdf(
+  pdfPath: string,
+  doc: FpdfDocument,
+  options: { readOnly?: boolean } = {},
+): Promise<Uint8Array> {
   const bytes = await readFile(pdfPath);
   const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
 
@@ -187,7 +191,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
   if (isXfa) {
     await drawCandidateValues(pdfDoc, doc);
   } else {
-    createCandidateWidgets(pdfDoc, doc, fontCache);
+    createCandidateWidgets(pdfDoc, doc, fontCache, options.readOnly ?? false);
   }
 
   if (isXfa && xfaInfo !== null) {
@@ -451,11 +455,17 @@ function uniqueFieldName(base: string, used: Set<string>): string {
  * Used for non-XFA PDFs (vector, raster, hybrid) where candidates have no
  * existing AcroForm backing. Radio candidates sharing a groupName are grouped
  * into a single PDFRadioGroup.
+ *
+ * When `readOnly` is true every created field is marked read-only so PDF
+ * viewers do not apply the "editable field" blue-highlight overlay. Use this
+ * for finalized exports; leave false (default) for interactive exports where
+ * the recipient should still be able to type into the fields.
  */
 function createCandidateWidgets(
   pdfDoc: PDFDocument,
   doc: FpdfDocument,
   fontCache: Map<string, PDFFont>,
+  readOnly = false,
 ): void {
   const hasCandidates = doc.pages.some((p) => p.candidateFields.some((c) => !c.dismissed));
   if (!hasCandidates) return;
@@ -501,6 +511,7 @@ function createCandidateWidgets(
         cb.addToPage(page, { x, y, width, height });
         makeWidgetTransparent(pdfDoc, cb);
         if (c.value === true) cb.check();
+        if (readOnly) cb.enableReadOnly();
         cb.updateAppearances();
       } else {
         const tf = form.createTextField(name);
@@ -536,6 +547,7 @@ function createCandidateWidgets(
           if (!overflows) tf.disableScrolling();
         }
 
+        if (readOnly) tf.enableReadOnly();
         if (font !== undefined) tf.updateAppearances(font);
       }
     }

@@ -64,14 +64,32 @@ body {
   z-index: 10;
   background: var(--bg-toolbar);
   border-bottom: 1px solid var(--border-toolbar);
-  padding: 8px 16px;
+  padding: 6px 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 0;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.toolbar-group + .toolbar-group {
+  border-left: 1px solid var(--border-toolbar);
+}
+
+.toolbar-group--status {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0;
 }
 
 #status {
   flex: 1;
+  min-width: 0;
   font-size: 14pt;
   color: var(--color-status);
   white-space: nowrap;
@@ -79,9 +97,11 @@ body {
   text-overflow: ellipsis;
 }
 
-#copy-path {
+/* All toolbar buttons share base styles */
+#toolbar button {
   font-size: 14pt;
-  padding: 4px 8px;
+  line-height: 1;
+  padding: 4px 10px;
   border: 1px solid var(--border-button);
   border-radius: 4px;
   background: var(--bg-button);
@@ -90,59 +110,26 @@ body {
   flex-shrink: 0;
 }
 
-#copy-path:hover {
+#toolbar button:not(:disabled):hover {
   background: var(--bg-button-hover);
 }
 
-#save,
-#toggle-fields,
-#clear-fields,
-#export-pdf,
-#dark-toggle {
-  font-size: 14pt;
-  padding: 4px 10px;
-  border: 1px solid var(--border-button);
-  border-radius: 4px;
-  background: var(--bg-button);
-  color: var(--color-button);
-  cursor: pointer;
-}
-
-#save:not(:disabled):hover,
-#toggle-fields:not(:disabled):hover,
-#clear-fields:not(:disabled):hover,
-#export-pdf:not(:disabled):hover,
-#dark-toggle:hover {
-  background: var(--bg-button-hover);
-}
-
-#save:disabled,
-#toggle-fields:disabled,
-#clear-fields:disabled,
-#export-pdf:disabled {
+#toolbar button:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-#zoom-controls {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+/* Icon-only buttons: compact square */
+#copy-path,
+#clear-fields,
+#dark-toggle {
+  padding: 4px 7px;
 }
 
-#zoom-controls button {
-  font-size: 14pt;
-  line-height: 1;
+/* Zoom controls */
+#zoom-out,
+#zoom-in {
   padding: 2px 8px;
-  border: 1px solid var(--border-button);
-  border-radius: 4px;
-  background: var(--bg-button);
-  color: var(--color-button);
-  cursor: pointer;
-}
-
-#zoom-controls button:hover {
-  background: var(--bg-button-hover);
 }
 
 #zoom-level {

@@ -262,6 +262,57 @@ describe('startServer', () => {
       const body = (await res.json()) as FpdfDocument;
       expect(body.pages[0]?.fields[0]?.value).toBe('Alice');
     });
+
+    it('simulates clear-fields then undo: JSON is empty after clear, restored after undo', async () => {
+      const mockPage = MOCK_DOC.pages[0];
+      const mockField = mockPage?.fields[0];
+      if (!mockPage || !mockField) throw new Error('fixture missing page/field');
+
+      const page = mockPage;
+      const field = mockField;
+
+      function buildDoc(value: string): FpdfDocument {
+        return {
+          ...MOCK_DOC,
+          pages: [{ ...page, fields: [{ ...field, value }] }],
+        };
+      }
+
+      async function wsSave(doc: FpdfDocument): Promise<void> {
+        await new Promise<void>((resolve, reject) => {
+          const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
+          ws.on('open', () => {
+            ws.send(JSON.stringify({ type: 'save', doc }));
+          });
+          ws.on('message', () => {
+            ws.close();
+            resolve();
+          });
+          ws.on('error', reject);
+        });
+      }
+
+      function readValue(): Promise<string | boolean> {
+        return readFile(jsonPath, 'utf-8').then((text) => {
+          const d = JSON.parse(text) as FpdfDocument;
+          const v = d.pages[0]?.fields[0]?.value;
+          if (v === undefined) throw new Error('field value missing in JSON');
+          return v;
+        });
+      }
+
+      // Populate the field
+      await wsSave(buildDoc('Bob'));
+      expect(await readValue()).toBe('Bob');
+
+      // Simulate clear: save with empty value
+      await wsSave(buildDoc(''));
+      expect(await readValue()).toBe('');
+
+      // Simulate undo: restore the original value
+      await wsSave(buildDoc('Bob'));
+      expect(await readValue()).toBe('Bob');
+    });
   });
 
   describe('POST /regenerate-acroform', () => {

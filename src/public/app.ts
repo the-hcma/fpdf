@@ -1782,12 +1782,12 @@ async function main(): Promise<void> {
     const pageTypes = new Set(fpdfDoc.pages.map((p) => p.pageType));
     if (pageTypes.has('raster') || pageTypes.has('raster+ocr')) {
       showWarning(
-        'This PDF appears to be a scanned document. No fields were detected automatically — right-click anywhere on the page to add fields manually. Exported values will be stamped directly onto the page.',
+        'This PDF appears to be a scanned document. No fields were detected automatically — right-click anywhere on the page to add fields manually. Use "Export PDF" to write values as interactive AcroForm fields.',
       );
     } else {
-      // vector or hybrid — candidateFields only; export stamps text onto the page
+      // vector or hybrid — candidateFields only; export creates AcroForm widgets
       showWarning(
-        'This PDF has no AcroForm fields. Detected field positions are approximate — click a field to adjust its layout. Exported values will be stamped directly onto the page.',
+        'This PDF has no AcroForm fields. Detected field positions are approximate — click a field to adjust its layout. Use "Export PDF" to write values as interactive AcroForm fields.',
       );
     }
   }

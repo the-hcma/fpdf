@@ -78,7 +78,9 @@ fpdf/
           "value": "",
           "required": false,
           "readOnly": false,
-          "options": []
+          "options": [],
+          "fontName": "TimesRoman",
+          "fontSize": 10
         }
       ],
       "candidateFields": [
@@ -95,7 +97,9 @@ fpdf/
           },
           "value": "",
           "confidence": "high",
-          "dismissed": false
+          "dismissed": false,
+          "fontName": "Courier",
+          "fontSize": 11
         }
       ],
       "textBlocks": [
@@ -156,6 +160,10 @@ fpdf/
 - `fontName` is the PDF font resource name (e.g. `"TT1"`, `"g_d0_f1"`) — consistent within a document, useful to distinguish header fonts from body/label fonts
 - `textBlocks` is always present (never omitted), but may be an empty array if text extraction fails
 
+### Field font notes
+- `fontName` (optional) — a `pdf-lib` `StandardFonts` name (e.g. `"Helvetica"`, `"TimesRoman"`, `"Courier"`). For `PdfField`, extracted from the `/DA` (Default Appearance) entry during analysis; omitted when Helvetica (the pdf-lib default) or unknown. For `CandidateField`, set by the user via the context-menu font picker. Used as the font on export.
+- `fontSize` (optional) — point size extracted from `/DA` (e.g. `10`, `12`). A PDF `/DA` size of `0` means "auto-size" — this is treated as omitted. When present, used as the auto-fit ceiling during export instead of the hard-coded 12 pt maximum.
+
 ### candidateFields notes
 - `candidateFields` contains fields detected from vector paths (lines, rectangles) in the page content stream — present only on pages where the PDF has no AcroForm, or always populated alongside AcroForm `fields`
 - Each candidate has the same `placement` coordinate space as `fields`
@@ -166,7 +174,7 @@ fpdf/
   - `"medium"`: correct aspect ratio but no label found nearby, or label found but geometry is ambiguous
   - `"low"`: geometry looks like a structural rule or border (full-width line, page-margin rect, etc.) but wasn't filtered out
 - `dismissed: true` means the user has explicitly discarded this candidate — the UI hides it; it remains in the JSON so re-analysis doesn't resurface it
-- `candidateFields` are exported as real AcroForm widget annotations by `fpdf export` for non-XFA PDFs (M11.2); for XFA PDFs their values are stamped as drawn text instead
+- `candidateFields` are exported as real AcroForm widget annotations by `fpdf export` for non-XFA PDFs; for XFA PDFs their values are stamped as drawn text instead
 - `candidateFields` is always present (never omitted), but will be `[]` for pure AcroForm PDFs where all fields are already in `fields`
 
 ---
@@ -341,7 +349,8 @@ fpdf fill form.pdf [--fresh] [--open] [--json path]
    │                 └─ No  → run analyzer → write form.fpdf.json
    │
    ├─ Start Express server on port 0 (OS-allocated)
-   ├─ Serve: PDF bytes (/pdf), JSON (/doc), filled export (/filled-pdf), static UI assets
+   ├─ Serve: PDF bytes (/pdf), JSON (/doc), read-only filled export (/filled-pdf), static UI assets
+   ├─ POST /save-acroform → exportPdf() → saves <name>.fpdf.acroform.pdf (editable AcroForm)
    ├─ POST /regenerate-acroform → regenerator.ts → saves <name>.fpdf-converted.acroform.pdf
    ├─ Print URL to stdout
    ├─ If --open flag: launch default browser automatically
@@ -386,8 +395,17 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | CI.2 | `03-24-test_increase_branch_coverage_to_80_` | Increase branch coverage from 74% → 80% (macOS): add tests for `debug-export` command, radio migration path, `POST /regenerate-acroform`, SPA catch-all route, select/dropdown fields in regenerator, textarea, unchecked checkbox, radio deduplication | ✅ |
 | CI.3 | `03-24-chore_apply_graphite-recommended_ci_trigger_config` | Apply Graphite-recommended CI trigger config: explicit `types: [opened, reopened, synchronize]` + `branches-ignore: ['**/graphite-base/**']` to prevent merge-queue draft PRs from blocking CI | ✅ |
 | CI.4 | `03-24-chore_add_new-pr_checklist_rule_to_agents.md` | Add new-PR checklist rule to AGENTS.md: confirm current PR is merged or all CI checks pass before starting new work | ✅ |
-| 10.10 | `03-26-feat_section-container-heuristic` | Section container heuristic: Phase 1 container-cell suppression (wide H-line pair cells that contain narrower cells at the same y-range are filtered out); `findLabelBelow` for fields whose labels sit below the fill-in line; Phase 3 stroked-rect container detection (large outer rectangles that enclose ≥ 2 H-lines are treated as structural containers, not fields; H-lines inside are emitted as individual fields with below-label search); Cigna pharmacy claim form added as integration test fixture | 🔲 PR #116 |
-| 11 | `candidate-edit/move-resize` | Edit-layout mode for candidate fields: click-to-select (outline + resize handles); drag to move; 8-handle resize; snap guide; `EditLayout` button in toolbar | 🔲 PR #117 |
-| 11.1 | `candidate-edit/draw-field` | Full edit-layout UX: draw new fields by right-click → "Add field here"; click-to-enter-edit / second-click-to-type; Delete key removes candidate; cascading context menu (duplicate, name, text alignment, delete); hover tooltip; font auto-shrinks to fit; export respects text alignment; scanned PDFs supported (right-click-to-add works on raster pages); radio/checkbox clicks not intercepted | 🔲 PR #118 |
-| 11.2 | — | AcroForm export for candidate fields: replace text-stamp export with real AcroForm widget creation (`form.createTextField` / `createCheckBox`); `uniqueFieldName()` sanitizes `displayName` with dedup suffix; text alignment preserved via `setAlignment()`; XFA PDFs keep stamped-text fallback | 🔲 |
+| 10.10 | `03-26-feat_section-container-heuristic` | Section container heuristic: Phase 1 container-cell suppression (wide H-line pair cells that contain narrower cells at the same y-range are filtered out); `findLabelBelow` for fields whose labels sit below the fill-in line; Phase 3 stroked-rect container detection (large outer rectangles that enclose ≥ 2 H-lines are treated as structural containers, not fields; H-lines inside are emitted as individual fields with below-label search); Cigna pharmacy claim form added as integration test fixture | ✅ PR #116 |
+| 11 | `candidate-edit/move-resize` | Edit-layout mode for candidate fields: click-to-select (outline + resize handles); drag to move; 8-handle resize; snap guide; `EditLayout` button in toolbar | ✅ PR #117 |
+| 11.1 | `candidate-edit/draw-field` | Full edit-layout UX: draw new fields by right-click → "Add field here"; click-to-enter-edit / second-click-to-type; Delete key removes candidate; cascading context menu (duplicate, name, text alignment, delete); hover tooltip; font auto-shrinks to fit; export respects text alignment; scanned PDFs supported (right-click-to-add works on raster pages); radio/checkbox clicks not intercepted | ✅ PR #118 |
+| 11.2 | — | AcroForm export for candidate fields: replace text-stamp export with real AcroForm widget creation (`form.createTextField` / `createCheckBox`); `uniqueFieldName()` sanitizes `displayName` with dedup suffix; text alignment preserved via `setAlignment()`; XFA PDFs keep stamped-text fallback | ✅ |
 | 11.3 | — | Radio button support for candidate fields: add `type: 'radio'` + `radioValue?` + `groupName?` to `CandidateField`; "Add field here" becomes a type-picker submenu (text / textarea / checkbox / radio); radio buttons share a group via `groupName`; export creates one `PDFRadioGroup` per group via `addOptionToPage()` | 🔲 |
+| 12 | `03-28-feat_font-name-size-storage` | Font name + size: parse `/DA` entry during analysis, store `fontName`/`fontSize` on both `PdfField` and `CandidateField`; font cache + `resolveFont` in exporter; use stored `fontSize` as auto-fit ceiling instead of hard-coded 12 pt; font picker submenu in context menu; `toCssFontFamily` helper applies stored font in UI preview | ✅ PR #129 |
+| 12.1 | `03-28-feat_doc-reload-on-external-edit` | External JSON reload: file watcher (directory-level, atomic-rename safe) detects third-party edits to `.fpdf.json`; content-hash guard skips server-initiated echo; broadcasts `docReload` to all connected UI clients | ✅ PR #130 |
+| fix | `03-28-fix_candidate-field-font-size` | Fix candidate field font size ceiling: auto-fit computation was ignoring `field.fontSize` for candidate text fields on export | ✅ PR #131 |
+| fix | `03-28-fix_candidate-widget-transparent` | Fix candidate widget appearance: `makeWidgetTransparent` deletes `/MK` and sets `/BS {W:0}` so candidate AcroForm widgets render without white fill or visible border; `updateAppearances` called after `/MK` deletion so the new `/AP` stream is generated without background | ✅ PR #132 |
+| fix | `03-28-fix_stale-no-acroform-warning` | Fix stale no-AcroForm warning: warn banner messages updated to reflect that candidate fields are now exported as AcroForm widgets rather than stamped text | ✅ PR #133 |
+| UI.2 | `03-28-feat_save-acroform-local` | Save AcroForm + toolbar redesign: `POST /save-acroform` saves editable AcroForm PDF as `<name>.fpdf.acroform.pdf`; `GET /filled-pdf` produces read-only printable PDF; toolbar reorganised into visual groups with CSS dividers; secondary buttons (copy path, clear fields, dark toggle) shrunk to icon-only with tooltips | ✅ PR #134 |
+| UI.3 | `03-28-feat_undo-clear-fields` | Undo clear fields: snapshot all field values before clearing; ✕ button flips to ↩ for a one-step undo; any subsequent manual field edit discards the snapshot and reverts the button | ✅ PR #135 |
+| UI.4 | `03-28-feat_button-tooltips` | Button tooltips: all toolbar and banner buttons have `title` attributes; `updateToggleLabel` syncs title with text so "Hide fields" state also has a tooltip | ✅ PR #136 |
+| UI.5 | `03-28-feat_fast-tooltips` | Fast custom toolbar tooltips: replaces 500ms OS-delay native title tooltip with a 150ms custom `#toolbar-tooltip` div; viewport-clamped (8 px margin), max-width 240 px with word-wrap; native `title` stashed/restored to prevent double tooltip | ✅ PR #137 |

@@ -56,6 +56,49 @@ function sha256Hex(buf: Uint8Array): string {
 }
 
 /**
+ * Maps the short PDF font resource names used in /DA strings to pdf-lib
+ * StandardFonts values. Only the 14 standard PDF fonts are listed.
+ */
+const PDF_DA_FONT_MAP: Record<string, string> = {
+  Helv: 'Helvetica',
+  HeBo: 'HelveticaBold',
+  HeOb: 'HelveticaOblique',
+  TiRo: 'TimesRoman',
+  TiBo: 'TimesRomanBold',
+  TiIt: 'TimesRomanItalic',
+  TiBI: 'TimesRomanBoldItalic',
+  Cour: 'Courier',
+  CoBo: 'CourierBold',
+  CoOb: 'CourierOblique',
+  CoBI: 'CourierBoldOblique',
+  Symb: 'Symbol',
+  ZaDb: 'ZapfDingbats',
+};
+
+/**
+ * Parse an AcroForm /DA (Default Appearance) string and return the font name
+ * and size it encodes. Returns empty object when the string is absent or
+ * doesn't match the expected `/<fontName> <size> Tf` pattern.
+ *
+ * fontName is mapped to the matching pdf-lib StandardFonts value when known,
+ * or kept as-is for embedded/non-standard fonts.
+ * fontName is omitted when it resolves to 'Helvetica' (the implicit default).
+ * fontSize is omitted when it is 0 (PDF spec "auto-size" sentinel).
+ */
+function parseDa(da: string | undefined): { fontName?: string; fontSize?: number } {
+  if (!da) return {};
+  const m = /\/([A-Za-z0-9_]+)\s+([\d.]+)\s+Tf/.exec(da);
+  if (m?.[1] === undefined || m[2] === undefined) return {};
+  const rawName: string = m[1];
+  const fontName = PDF_DA_FONT_MAP[rawName] ?? rawName;
+  const fontSize = parseFloat(m[2]);
+  const result: { fontName?: string; fontSize?: number } = {};
+  if (fontName !== 'Helvetica') result.fontName = fontName;
+  if (fontSize > 0) result.fontSize = fontSize;
+  return result;
+}
+
+/**
  * Derive a human-readable label from an AcroForm field name.
  *
  * Many PDFs encode the field number and description in the partial name, e.g.:
@@ -376,6 +419,14 @@ export function extractOrphanWidgets(
           ? tuRaw.decodeText().trim()
           : undefined;
 
+      // /DA — default appearance (font name + size)
+      const daRaw = resolveInherited(annotDict, 'DA', pdfDoc);
+      const daStr =
+        daRaw instanceof PDFString || daRaw instanceof PDFHexString
+          ? daRaw.decodeText()
+          : undefined;
+      const { fontName, fontSize } = parseDa(daStr);
+
       // /Opt — options for /Ch (select) fields
       const options: string[] = [];
       if (type === 'select') {
@@ -408,6 +459,8 @@ export function extractOrphanWidgets(
         required,
         readOnly: false,
         options,
+        ...(fontName !== undefined ? { fontName } : {}),
+        ...(fontSize !== undefined ? { fontSize } : {}),
       });
     } catch {
       // best-effort — skip malformed annotations
@@ -1670,6 +1723,9 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
       const tuEntry = field.acroField.dict.lookupMaybe(PDFName.of('TU'), PDFString);
       const tooltip = tuEntry ? tuEntry.decodeText().trim() : undefined;
 
+      const daEntry = field.acroField.dict.lookupMaybe(PDFName.of('DA'), PDFString);
+      const { fontName, fontSize } = parseDa(daEntry?.decodeText());
+
       // For radio widgets, record the specific option (on-value) this widget
       // represents so the UI can render each button correctly and store the
       // selected option string instead of a boolean.
@@ -1691,6 +1747,8 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
         readOnly: isXfaPdf ? false : field.isReadOnly(),
         options,
         ...(radioValue !== undefined ? { radioValue } : {}),
+        ...(fontName !== undefined ? { fontName } : {}),
+        ...(fontSize !== undefined ? { fontSize } : {}),
       };
 
       const bucket = pageFields.get(pageNum) ?? pageFields.get(1);

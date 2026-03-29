@@ -55,6 +55,16 @@ export interface CandidateField {
   /** Text alignment for the input field, set by the user. */
   textAlign?: 'left' | 'center' | 'right' | 'justify';
   /**
+   * Font size in points extracted from /DA during analysis, or set by the user.
+   * Used as the auto-fit ceiling during export. Omitted when unknown.
+   */
+  fontSize?: number;
+  /**
+   * Font name matching a pdf-lib StandardFonts value (e.g. 'Helvetica', 'TimesRoman').
+   * Used to embed the correct font on export. Omitted when Helvetica (implicit default).
+   */
+  fontName?: string;
+  /**
    * For type='radio': the on-value this specific button represents (e.g. 'yes', 'option1').
    * Stored as the selected value in `value` across all buttons in the same group.
    */
@@ -109,6 +119,16 @@ export interface PdfField {
   radioValue?: string;
   /** Text alignment for the input field, set by the user. */
   textAlign?: 'left' | 'center' | 'right' | 'justify';
+  /**
+   * Font size in points extracted from /DA during analysis, or set by the user.
+   * Used as the auto-fit ceiling during export. Omitted when unknown.
+   */
+  fontSize?: number;
+  /**
+   * Font name matching a pdf-lib StandardFonts value (e.g. 'Helvetica', 'TimesRoman').
+   * Used to embed the correct font on export. Omitted when Helvetica (implicit default).
+   */
+  fontName?: string;
 }
 
 /**

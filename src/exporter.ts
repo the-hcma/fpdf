@@ -24,6 +24,43 @@ const MAX_FONT_SIZE = 12; // pt — hard cap for all text fields
 const MIN_FONT_SIZE = 4; // pt — lower bound; matches pdf-lib's internal minimum
 const FIELD_PADDING = 2; // pt — inner margin assumed on each side
 import type { CandidateField, FpdfDocument, PdfKind } from './types.js';
+
+/** Maps pdf-lib StandardFonts string values (as stored in fontName) to enum entries. */
+const STANDARD_FONT_MAP: Partial<Record<string, StandardFonts>> = {
+  Helvetica: StandardFonts.Helvetica,
+  HelveticaBold: StandardFonts.HelveticaBold,
+  HelveticaOblique: StandardFonts.HelveticaOblique,
+  HelveticaBoldOblique: StandardFonts.HelveticaBoldOblique,
+  TimesRoman: StandardFonts.TimesRoman,
+  TimesRomanBold: StandardFonts.TimesRomanBold,
+  TimesRomanItalic: StandardFonts.TimesRomanItalic,
+  TimesRomanBoldItalic: StandardFonts.TimesRomanBoldItalic,
+  Courier: StandardFonts.Courier,
+  CourierBold: StandardFonts.CourierBold,
+  CourierOblique: StandardFonts.CourierOblique,
+  CourierBoldOblique: StandardFonts.CourierBoldOblique,
+  Symbol: StandardFonts.Symbol,
+  ZapfDingbats: StandardFonts.ZapfDingbats,
+};
+
+/**
+ * Look up or embed a StandardFont by name. Falls back to Helvetica when the
+ * name is unknown. Results are cached so each font is embedded only once.
+ */
+async function resolveFont(
+  pdfDoc: PDFDocument,
+  fontName: string | undefined,
+  cache: Map<string, PDFFont>,
+): Promise<PDFFont> {
+  const key = fontName ?? 'Helvetica';
+  const cached = cache.get(key);
+  if (cached !== undefined) return cached;
+  const sf =
+    (fontName !== undefined ? STANDARD_FONT_MAP[fontName] : undefined) ?? StandardFonts.Helvetica;
+  const font = await pdfDoc.embedFont(sf);
+  cache.set(key, font);
+  return font;
+}
 import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from './analyzer.js';
 
 /**
@@ -113,7 +150,36 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
   // Must happen before getForm() is called on the XFA path (getForm()
   // strips /XFA from the in-memory AcroForm dict).
   const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const { fontSizes, noScrollDisable } = buildFontSizeMap(doc, allValues, helv);
+
+  // Build font cache — embed helv as the default, then pre-embed any other
+  // StandardFonts referenced by fields so measurement and appearance rendering
+  // use the correct per-field font metrics.
+  const fontCache = new Map<string, PDFFont>();
+  fontCache.set('Helvetica', helv);
+  for (const page of doc.pages) {
+    for (const field of [...page.fields, ...page.candidateFields]) {
+      if (field.fontName !== undefined && !fontCache.has(field.fontName)) {
+        await resolveFont(pdfDoc, field.fontName, fontCache);
+      }
+    }
+  }
+
+  // fieldFonts: field name → resolved PDFFont, for fields with a non-default font.
+  // Used to regenerate per-field appearances with the correct font after the
+  // global updateFieldAppearances(helv) pass.
+  const fieldFonts = new Map<string, PDFFont>();
+  for (const page of doc.pages) {
+    for (const field of page.fields) {
+      if (field.fontName !== undefined) {
+        const font = fontCache.get(field.fontName);
+        if (font !== undefined && !fieldFonts.has(field.name)) {
+          fieldFonts.set(field.name, font);
+        }
+      }
+    }
+  }
+
+  const { fontSizes, noScrollDisable } = buildFontSizeMap(doc, allValues, fontCache, helv);
 
   // Candidate fields: create real AcroForm widgets for non-XFA PDFs.
   // For XFA PDFs, fall back to stamped text — calling getForm() before the XFA
@@ -121,7 +187,7 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
   if (isXfa) {
     await drawCandidateValues(pdfDoc, doc);
   } else {
-    createCandidateWidgets(pdfDoc, doc);
+    createCandidateWidgets(pdfDoc, doc, fontCache);
   }
 
   if (isXfa && xfaInfo !== null) {
@@ -145,6 +211,8 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     // is a no-op since /XFA is already gone.  Pass helv explicitly so pdf-lib
     // can always render (avoids silent skips for fields with custom fonts).
     pdfDoc.getForm().updateFieldAppearances(helv);
+    // Re-render fields with non-default fonts using the correct font.
+    applyNonDefaultFontAppearances(pdfDoc, fieldFonts);
 
     // Step 5: Restore /XFA so it is serialised into the output bytes.
     if (acroForm instanceof PDFDict && xfaValue !== undefined) {
@@ -160,10 +228,20 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     writeAcroFormValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, 'acroform');
     // Phase 2: fill orphan widget annotations (present in page /Annots but not
     // in the AcroForm field tree — common in XFA-derived PDFs).  Each orphan
-    // widget's appearance is regenerated inside this function using helv.
-    writeOrphanWidgetValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, helv);
-    // Regenerate appearances for AcroForm-tree fields.
+    // widget's appearance is regenerated inside this function using per-field font.
+    writeOrphanWidgetValues(
+      pdfDoc,
+      allValues,
+      allAlignments,
+      fontSizes,
+      noScrollDisable,
+      helv,
+      fieldFonts,
+    );
+    // Regenerate appearances for AcroForm-tree fields using helv as base.
     pdfDoc.getForm().updateFieldAppearances(helv);
+    // Re-render fields with non-default fonts using the correct font.
+    applyNonDefaultFontAppearances(pdfDoc, fieldFonts);
   }
 
   // updateFieldAppearances: false — we already ran it explicitly above with
@@ -210,20 +288,21 @@ function computeTextFontSize(
   fieldHeight: number,
   multiline: boolean,
   font: PDFFont,
+  maxFontSize = MAX_FONT_SIZE,
 ): number {
   const availW = fieldWidth - FIELD_PADDING * 2;
   const availH = fieldHeight - FIELD_PADDING * 2;
 
   if (!multiline) {
     // Round availH to 1 decimal to avoid float noise (e.g. 15.6 - 4 = 11.60000…2).
-    let size = Math.round(Math.min(MAX_FONT_SIZE, availH) * 10) / 10;
+    let size = Math.round(Math.min(maxFontSize, availH) * 10) / 10;
     while (size > MIN_FONT_SIZE && font.widthOfTextAtSize(value, size) > availW) {
       size -= 0.5;
     }
     return Math.max(MIN_FONT_SIZE, size);
   }
 
-  for (let size = MAX_FONT_SIZE; size >= MIN_FONT_SIZE; size -= 0.5) {
+  for (let size = maxFontSize; size >= MIN_FONT_SIZE; size -= 0.5) {
     const lineCount = wrapTextLineCount(value, availW, size, font);
     if (lineCount * (size * 1.3) <= availH) return size;
   }
@@ -242,7 +321,8 @@ function computeTextFontSize(
 function buildFontSizeMap(
   doc: FpdfDocument,
   allValues: Map<string, string | boolean>,
-  font: PDFFont,
+  fontCache: Map<string, PDFFont>,
+  defaultFont: PDFFont,
 ): { fontSizes: Map<string, number>; noScrollDisable: Set<string> } {
   const fontSizes = new Map<string, number>();
   const noScrollDisable = new Set<string>();
@@ -253,12 +333,16 @@ function buildFontSizeMap(
       if (fontSizes.has(field.name)) continue; // first definition wins
       const value = allValues.get(field.name);
       if (typeof value !== 'string' || value === '') continue;
+      const font =
+        (field.fontName !== undefined ? fontCache.get(field.fontName) : undefined) ?? defaultFont;
+      const ceiling = field.fontSize ?? MAX_FONT_SIZE;
       const size = computeTextFontSize(
         value,
         field.placement.width,
         field.placement.height,
         field.type === 'textarea',
         font,
+        ceiling,
       );
       fontSizes.set(field.name, size);
       // If the text still overflows at the computed (minimum) font size,
@@ -368,12 +452,17 @@ function uniqueFieldName(base: string, used: Set<string>): string {
  * existing AcroForm backing. Radio candidates sharing a groupName are grouped
  * into a single PDFRadioGroup.
  */
-function createCandidateWidgets(pdfDoc: PDFDocument, doc: FpdfDocument): void {
+function createCandidateWidgets(
+  pdfDoc: PDFDocument,
+  doc: FpdfDocument,
+  fontCache: Map<string, PDFFont>,
+): void {
   const hasCandidates = doc.pages.some((p) => p.candidateFields.some((c) => !c.dismissed));
   if (!hasCandidates) return;
 
   const form = pdfDoc.getForm();
   const usedNames = new Set<string>();
+  const helv = fontCache.get('Helvetica') ?? fontCache.values().next().value;
 
   // Collect radio candidates grouped by groupName first so we can create each
   // PDFRadioGroup once and add all its widgets in a single pass.
@@ -418,7 +507,32 @@ function createCandidateWidgets(pdfDoc: PDFDocument, doc: FpdfDocument): void {
         if (typeof c.value === 'string' && c.value !== '') tf.setText(c.value);
         const align = toTextAlignment(c.textAlign);
         if (align !== undefined) tf.setAlignment(align);
+        const font = (c.fontName !== undefined ? fontCache.get(c.fontName) : undefined) ?? helv;
+        if (font !== undefined) tf.updateAppearances(font);
       }
+    }
+  }
+}
+
+/**
+ * After the global updateFieldAppearances(helv) pass, re-render text fields
+ * that have a non-Helvetica font stored in fieldFonts using their correct font.
+ * This overrides the Helvetica appearance for those fields.
+ */
+function applyNonDefaultFontAppearances(
+  pdfDoc: PDFDocument,
+  fieldFonts: Map<string, PDFFont>,
+): void {
+  if (fieldFonts.size === 0) return;
+  const form = pdfDoc.getForm();
+  for (const [name, font] of fieldFonts) {
+    try {
+      const pdfField = form.getField(name);
+      if (pdfField instanceof PDFTextField) {
+        pdfField.updateAppearances(font);
+      }
+    } catch {
+      // Field absent from the PDF — skip silently.
     }
   }
 }
@@ -550,6 +664,7 @@ function writeOrphanWidgetValues(
   fontSizes: Map<string, number>,
   noScrollDisable: Set<string>,
   helv: PDFFont,
+  fieldFonts: Map<string, PDFFont>,
 ): void {
   for (let pageIdx = 0; pageIdx < pdfDoc.getPageCount(); pageIdx++) {
     const page = pdfDoc.getPage(pageIdx);
@@ -608,7 +723,7 @@ function writeOrphanWidgetValues(
               // Not all widgets support scrolling flags — safe to skip.
             }
           }
-          textField.updateAppearances(helv);
+          textField.updateAppearances(fieldFonts.get(name) ?? helv);
         } else if (ft === '/Btn') {
           // ── Checkbox ────────────────────────────────────────────────────
           // Distinguish checkbox from radio/pushbutton via field flags.

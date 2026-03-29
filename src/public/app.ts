@@ -579,25 +579,27 @@ function makeFieldInteractive(
   if (onDelete) editDeleteCallbacks.set(wrapper, onDelete);
 
   // Enter edit mode on click when not already in edit mode (capture phase).
-  // Skip if this wrapper's input already has focus — user is typing, let clicks through normally.
+  // Ctrl/Cmd+click always selects for repositioning, even when the field has focus.
+  // Plain click on a focused text field is passed through for cursor positioning.
   wrapper.addEventListener(
     'pointerdown',
     (e) => {
       if (document.body.classList.contains('edit-layout')) return;
       if (e.button !== 0) return;
-      // For radio/checkbox: Ctrl/Cmd+click selects for repositioning; plain click toggles.
+      if (e.ctrlKey || e.metaKey) {
+        e.stopPropagation();
+        e.preventDefault();
+        hideContextMenu();
+        hideNameEditor();
+        editSelectField(wrapper);
+        return;
+      }
+      // For radio/checkbox: plain click toggles the input — don't enter edit mode.
       const target = e.target as HTMLElement;
       if (
         target instanceof HTMLInputElement &&
         (target.type === 'radio' || target.type === 'checkbox')
       ) {
-        if (e.ctrlKey || e.metaKey) {
-          e.stopPropagation();
-          e.preventDefault();
-          hideContextMenu();
-          hideNameEditor();
-          editSelectField(wrapper);
-        }
         return;
       }
       if (wrapper.contains(document.activeElement)) return;
@@ -618,17 +620,11 @@ function makeFieldInteractive(
       const inputEl = wrapper.querySelector<HTMLElement>('[data-field-id]');
       const name = inputEl ? (inputEl.dataset.fieldName ?? '').trim() : '';
       const inEdit = document.body.classList.contains('edit-layout');
-      const inputEl2 = wrapper.querySelector<HTMLInputElement>(
-        'input[type="radio"], input[type="checkbox"]',
-      );
-      const isToggle = inputEl2 !== null;
       const hints = onDelete
         ? 'Drag: move · Corners: resize · Del: delete'
         : 'Drag: move · Corners: resize';
-      const selectHint = isToggle && !inEdit ? 'Ctrl+click: select to reposition' : '';
       let text = name;
       if (inEdit) text = text ? `${text} · ${hints}` : hints;
-      else if (selectHint) text = text ? `${text} · ${selectHint}` : selectHint;
       if (text) showTooltip(text, tooltipMouseX, tooltipMouseY);
     }, 600);
   });

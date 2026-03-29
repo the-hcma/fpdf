@@ -502,12 +502,37 @@ function createCandidateWidgets(
         if (c.value === true) cb.check();
       } else {
         const tf = form.createTextField(name);
-        if (c.type === 'textarea') tf.enableMultiline();
+        const multiline = c.type === 'textarea';
+        if (multiline) tf.enableMultiline();
         tf.addToPage(page, { x, y, width, height });
-        if (typeof c.value === 'string' && c.value !== '') tf.setText(c.value);
+        const value = typeof c.value === 'string' ? c.value : '';
+        if (value !== '') tf.setText(value);
         const align = toTextAlignment(c.textAlign);
         if (align !== undefined) tf.setAlignment(align);
         const font = (c.fontName !== undefined ? fontCache.get(c.fontName) : undefined) ?? helv;
+
+        // Auto-fit font size so text doesn't overflow the field bounds.
+        // For single-line fields containing embedded newlines, measure only
+        // the longest line — PDF viewers typically display up to the first \n.
+        if (value !== '' && font !== undefined) {
+          const measureValue = multiline
+            ? value
+            : value.split('\n').reduce((a, b) => (a.length >= b.length ? a : b), '');
+          const size = computeTextFontSize(
+            measureValue,
+            width,
+            height,
+            multiline,
+            font,
+            c.fontSize ?? MAX_FONT_SIZE,
+          );
+          tf.setFontSize(size);
+          // Disable scrolling only when the text actually fits at the computed size.
+          const overflows =
+            !multiline && font.widthOfTextAtSize(measureValue, size) > width - FIELD_PADDING * 2;
+          if (!overflows) tf.disableScrolling();
+        }
+
         if (font !== undefined) tf.updateAppearances(font);
       }
     }

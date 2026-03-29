@@ -523,6 +523,122 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     expect(names).toEqual(['Name', 'Name_1']);
   });
 
+  it('auto-fits font size for candidate text fields so long values fit', async () => {
+    // Narrow (50pt) field with a long value — without setFontSize the default
+    // size 0 ("auto") causes PDF viewers to stretch the font to fill the field
+    // height, which overflows the width.  With auto-fit the exported font size
+    // must be ≤ 12pt (MAX_FONT_SIZE) and the field value must be stored.
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf(
+      'plain-candidate-autofit.pdf',
+      plainBytes,
+      'fpdf-exporter-tests',
+    );
+
+    const candidate: CandidateField = {
+      id: 'caf1',
+      type: 'text',
+      label: 'Rx Number',
+      displayName: 'Rx Number',
+      placement: { x: 50, y: 700, width: 50, height: 14 },
+      value: '123350117225',
+      confidence: 'medium',
+      dismissed: false,
+    };
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-candidate-autofit.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const bytes = await exportPdf(plainPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getTextField('Rx_Number');
+    // Value is preserved regardless of font-size shrinking.
+    expect(tf.getText()).toBe('123350117225');
+    // Font size must have been set (non-zero) and must not exceed MAX_FONT_SIZE.
+    const daStr = tf.acroField.getDefaultAppearance()?.match(/[\d.]+\s+Tf/)?.[0] ?? '0';
+    const size = parseFloat(daStr);
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThanOrEqual(12);
+  });
+
+  it('auto-fits font size for candidate textarea fields with multiline values', async () => {
+    const plainBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    const plainPath = await writeTempPdf(
+      'plain-candidate-textarea-autofit.pdf',
+      plainBytes,
+      'fpdf-exporter-tests',
+    );
+
+    const candidate: CandidateField = {
+      id: 'caf2',
+      type: 'textarea',
+      label: 'Rx Number',
+      displayName: 'Rx Number',
+      placement: { x: 50, y: 700, width: 75, height: 22 },
+      value: '123350117225\n(on file Express Scripts)',
+      confidence: 'medium',
+      dismissed: false,
+    };
+
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: plainPath,
+        pdfFilename: 'plain-candidate-textarea-autofit.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector',
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    const bytes = await exportPdf(plainPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getTextField('Rx_Number');
+    expect(tf.getText()).toBe('123350117225\n(on file Express Scripts)');
+    const daStr = tf.acroField.getDefaultAppearance()?.match(/[\d.]+\s+Tf/)?.[0] ?? '0';
+    const size = parseFloat(daStr);
+    expect(size).toBeGreaterThan(0);
+    expect(size).toBeLessThanOrEqual(12);
+  });
+
   it('falls back to drawCandidateValues for XFA PDFs with candidate fields', async () => {
     // For XFA PDFs we stamp text rather than creating AcroForm widgets, to avoid
     // calling getForm() before the XFA branch captures the /XFA entry.

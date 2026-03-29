@@ -97,11 +97,24 @@ Signature and button fields are skipped.
 
 ## Exporting
 
+### CLI export
+
 ```bash
 fpdf export form.fpdf.json
 ```
 
 Writes filled values back into the original PDF and saves a new file alongside it (e.g. `form-filled.pdf`). Use `-o` to specify a different output path.
+
+### Browser export buttons
+
+The toolbar offers two in-browser export actions:
+
+| Button | Output | Fields |
+|---|---|---|
+| **Export PDF** | `<name>-filled.pdf` (download) | Read-only — fields are flattened; no blue viewer highlight |
+| **Save AcroForm** | `<name>.fpdf.acroform.pdf` (saved next to source) | Editable — fields remain interactive in any standard PDF viewer |
+
+**Save AcroForm** is shown for all PDF types except pure AcroForm (which already has live editable fields). It is useful when you want to hand off a pre-filled but still-editable form to a recipient.
 
 ## UI features
 
@@ -110,6 +123,9 @@ Writes filled values back into the original PDF and saves a new file alongside i
 - **Zoom** — toolbar buttons or Ctrl+scroll (mouse wheel).
 - **Tab order** — Tab and Shift+Tab step through fields in reading order (top-to-bottom, left-to-right).
 - **Copy path** — copies the absolute path of the current PDF to the clipboard.
+- **Export PDF** — download a printable, read-only PDF with all field values baked in (no blue viewer highlight).
+- **Save AcroForm** — (non-AcroForm PDFs) save an editable `.fpdf.acroform.pdf` alongside the source; fields stay interactive in any PDF viewer.
+- **Clear fields** — erase all filled values. The button flips to ↩ immediately after, allowing a one-step undo; the next manual field edit commits the cleared state and discards the undo.
 
 ### Edit layout (vector/no-AcroForm PDFs)
 

@@ -499,12 +499,15 @@ function createCandidateWidgets(
       if (c.type === 'checkbox') {
         const cb = form.createCheckBox(name);
         cb.addToPage(page, { x, y, width, height });
+        makeWidgetTransparent(pdfDoc, cb);
         if (c.value === true) cb.check();
+        cb.updateAppearances();
       } else {
         const tf = form.createTextField(name);
         const multiline = c.type === 'textarea';
         if (multiline) tf.enableMultiline();
         tf.addToPage(page, { x, y, width, height });
+        makeWidgetTransparent(pdfDoc, tf);
         const value = typeof c.value === 'string' ? c.value : '';
         if (value !== '') tf.setText(value);
         const align = toTextAlignment(c.textAlign);
@@ -536,6 +539,29 @@ function createCandidateWidgets(
         if (font !== undefined) tf.updateAppearances(font);
       }
     }
+  }
+}
+
+/**
+ * Remove the white background fill and border from a candidate field widget
+ * so it renders transparently over the existing PDF content.
+ *
+ * pdf-lib stores background (/MK /BG) and border color (/MK /BC) on each
+ * widget annotation and reads them when generating the /AP appearance stream.
+ * Deleting /MK before updateAppearances causes pdf-lib to omit the fill and
+ * border rectangles from the generated stream.
+ *
+ * /BS W=0 additionally suppresses the border in viewers that render the
+ * annotation border directly from the dict rather than from /AP.
+ */
+function makeWidgetTransparent(
+  pdfDoc: PDFDocument,
+  field: { acroField: { getWidgets(): { dict: PDFDict }[] } },
+): void {
+  const bsDict = pdfDoc.context.obj({ W: 0 });
+  for (const widget of field.acroField.getWidgets()) {
+    widget.dict.delete(PDFName.of('MK'));
+    widget.dict.set(PDFName.of('BS'), bsDict);
   }
 }
 

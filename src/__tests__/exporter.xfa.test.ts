@@ -578,8 +578,9 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     // Value is preserved regardless of font-size shrinking.
     expect(tf.getText()).toBe('123350117225');
     // Font size must have been set (non-zero) and must not exceed MAX_FONT_SIZE.
-    const daStr = tf.acroField.getDefaultAppearance()?.match(/[\d.]+\s+Tf/)?.[0] ?? '0';
-    const size = parseFloat(daStr);
+    const daStr = tf.acroField.getDefaultAppearance()?.match(/[\d.]+\s+Tf/)?.[0];
+    expect(daStr).toBeDefined();
+    const size = parseFloat(daStr ?? '0');
     expect(size).toBeGreaterThan(0);
     expect(size).toBeLessThanOrEqual(12);
   });
@@ -633,8 +634,9 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const result = await PDFDocument.load(bytes);
     const tf = result.getForm().getTextField('Rx_Number');
     expect(tf.getText()).toBe('123350117225\n(on file Express Scripts)');
-    const daStr = tf.acroField.getDefaultAppearance()?.match(/[\d.]+\s+Tf/)?.[0] ?? '0';
-    const size = parseFloat(daStr);
+    const daStr = tf.acroField.getDefaultAppearance()?.match(/[\d.]+\s+Tf/)?.[0];
+    expect(daStr).toBeDefined();
+    const size = parseFloat(daStr ?? '0');
     expect(size).toBeGreaterThan(0);
     expect(size).toBeLessThanOrEqual(12);
   });

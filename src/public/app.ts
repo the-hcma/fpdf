@@ -1577,7 +1577,9 @@ function initToggle(): void {
 function updateToggleLabel(): void {
   const btn = document.getElementById('toggle-fields');
   if (!btn) return;
-  btn.textContent = document.body.classList.contains('show-fields') ? 'Hide fields' : 'Show fields';
+  const showing = document.body.classList.contains('show-fields');
+  btn.textContent = showing ? 'Hide fields' : 'Show fields';
+  btn.title = showing ? 'Hide field highlights' : 'Highlight fillable fields';
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -1944,7 +1946,65 @@ async function main(): Promise<void> {
   });
 }
 
+// ── Toolbar tooltips ──────────────────────────────────────────────────────────
+// Browser native title-attribute tooltips have a fixed OS-level delay (~500ms).
+// This replaces them with a custom tooltip that appears after 150ms.
+
+function initToolbarTooltips(): void {
+  const toolbar = document.getElementById('toolbar');
+  if (!toolbar) return;
+
+  const tip = document.createElement('div');
+  tip.id = 'toolbar-tooltip';
+  tip.setAttribute('hidden', '');
+  document.body.appendChild(tip);
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let activeEl: HTMLElement | null = null;
+
+  function hide(): void {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    tip.setAttribute('hidden', '');
+    if (activeEl !== null) {
+      const saved = activeEl.dataset.savedTitle;
+      if (saved !== undefined) {
+        activeEl.title = saved;
+        delete activeEl.dataset.savedTitle;
+      }
+      activeEl = null;
+    }
+  }
+
+  toolbar.addEventListener('mouseover', (e) => {
+    const target = (e.target as HTMLElement).closest<HTMLElement>('[title]');
+    if (target === null || target === activeEl) return;
+    hide();
+    activeEl = target;
+    const text = target.title;
+    // Stash and remove native title so the browser tooltip doesn't also appear.
+    target.dataset.savedTitle = text;
+    target.removeAttribute('title');
+    timer = setTimeout(() => {
+      tip.textContent = text;
+      tip.removeAttribute('hidden');
+      // Measure after making visible so getBoundingClientRect reflects actual size.
+      const rect = target.getBoundingClientRect();
+      const tipWidth = tip.getBoundingClientRect().width;
+      const idealLeft = rect.left + rect.width / 2 - tipWidth / 2;
+      const clampedLeft = Math.max(8, Math.min(idealLeft, window.innerWidth - tipWidth - 8));
+      tip.style.left = `${String(Math.round(clampedLeft))}px`;
+      tip.style.top = `${String(Math.round(rect.bottom + 6))}px`;
+    }, 150);
+  });
+
+  toolbar.addEventListener('mouseleave', hide);
+}
+
 initDarkToggle();
+initToolbarTooltips();
 main().catch((err: unknown) => {
   const msg = err instanceof Error ? err.message : String(err);
   showError(msg);

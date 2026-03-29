@@ -116,6 +116,53 @@ function debounce<T extends unknown[]>(fn: (...args: T) => void, ms: number): (.
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
+/**
+ * Return true when the incoming doc differs from the current one in any way
+ * that cannot be handled by a lightweight value-only DOM patch — i.e. when
+ * anything other than field `value` properties has changed.
+ *
+ * Checks: page count, field count, candidate field count, field IDs (order
+ * matters), placement, and non-value properties (fontName, fontSize,
+ * textAlign, type, displayName).  Candidate field values are not patched by
+ * the lightweight path, so any candidate change counts as structural.
+ */
+function isStructuralChange(current: FpdfDocument, incoming: FpdfDocument): boolean {
+  if (current.pages.length !== incoming.pages.length) return true;
+  for (let i = 0; i < current.pages.length; i++) {
+    const cp = current.pages[i];
+    const np = incoming.pages[i];
+    if (!cp || !np) return true;
+    if (cp.fields.length !== np.fields.length) return true;
+    if (cp.candidateFields.length !== np.candidateFields.length) return true;
+    for (let j = 0; j < cp.fields.length; j++) {
+      const cf = cp.fields[j];
+      const nf = np.fields[j];
+      if (!cf || !nf) return true;
+      if (
+        cf.id !== nf.id ||
+        cf.type !== nf.type ||
+        cf.fontName !== nf.fontName ||
+        cf.fontSize !== nf.fontSize ||
+        cf.textAlign !== nf.textAlign ||
+        cf.placement.x !== nf.placement.x ||
+        cf.placement.y !== nf.placement.y ||
+        cf.placement.width !== nf.placement.width ||
+        cf.placement.height !== nf.placement.height
+      )
+        return true;
+    }
+    // Any candidate field change (value or structural) triggers a full reload
+    // because candidate values are not handled by the lightweight patch path.
+    for (let j = 0; j < cp.candidateFields.length; j++) {
+      const cc = cp.candidateFields[j];
+      const nc = np.candidateFields[j];
+      if (!cc || !nc) return true;
+      if (cc.id !== nc.id || cc.value !== nc.value) return true;
+    }
+  }
+  return false;
+}
+
 function initWebSocket(
   onSaved: (updatedAt: string) => void,
   onReload: (doc: FpdfDocument) => void,
@@ -1555,7 +1602,16 @@ async function main(): Promise<void> {
       setSaveButtonDirty(false);
     },
     (newDoc) => {
-      // Apply externally-changed field values to the in-memory doc and DOM inputs.
+      // If the structure changed (fields added/removed, placement or non-value
+      // properties updated, candidate fields changed), a full page reload is the
+      // only correct way to reflect everything.  A structural diff is cheap
+      // because it short-circuits on the first mismatch.
+      if (isStructuralChange(fpdfDoc, newDoc)) {
+        window.location.reload();
+        return;
+      }
+      // Structure is identical — only values changed (e.g. another browser
+      // window saved).  Merge values into the existing DOM without a reload.
       for (const newPage of newDoc.pages) {
         const existingPage = fpdfDoc.pages.find((p) => p.pageNumber === newPage.pageNumber);
         if (!existingPage) continue;

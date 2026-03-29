@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { buildProgram } from '../cli.js';
 import { logger } from '../logger.js';
+import type { Interface as RlInterface } from 'node:readline';
 
 vi.mock('../analyzer.js', () => ({
   analyzePdf: vi.fn(),
@@ -28,6 +29,19 @@ vi.mock('open', () => ({ default: vi.fn().mockResolvedValue(undefined) }));
 
 vi.mock('../exporter.js', () => ({
   exportPdf: vi.fn(),
+}));
+
+vi.mock('node:fs', () => ({
+  existsSync: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock('node:readline', () => ({
+  createInterface: vi.fn().mockReturnValue({
+    question: vi.fn((_prompt: unknown, cb: (answer: string) => void) => {
+      cb('');
+    }),
+    close: vi.fn(),
+  } as unknown as RlInterface),
 }));
 
 vi.mock('node:fs/promises', () => ({
@@ -88,9 +102,9 @@ describe('CLI program structure', () => {
     expect(opt?.defaultValue).toBe(false);
   });
 
-  it('has five top-level commands and no more', () => {
+  it('has six top-level commands and no more', () => {
     const program = buildProgram();
-    expect(program.commands).toHaveLength(5);
+    expect(program.commands).toHaveLength(6);
   });
 
   describe('export command action', () => {
@@ -944,6 +958,243 @@ describe('CLI program structure', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
 
       expect(errorSpy).toHaveBeenCalledWith('file not found');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe('save-acroform command action', () => {
+    let infoSpy: MockInstance;
+    let warnSpy: MockInstance;
+    let errorSpy: MockInstance;
+    let exitSpy: MockInstance;
+
+    const mockDoc = {
+      metadata: {
+        version: '1.0',
+        originalPdf: '/abs/form.pdf',
+        pdfFilename: 'form.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform' as const,
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [
+            {
+              id: 'c1',
+              type: 'text' as const,
+              label: 'Name',
+              displayName: 'Name',
+              placement: { x: 50, y: 700, width: 150, height: 14 },
+              value: 'Alice',
+              confidence: 'high' as const,
+              dismissed: false,
+            },
+          ],
+          textBlocks: [],
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      infoSpy = vi.spyOn(logger, 'info').mockReturnValue(undefined);
+      warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
+      errorSpy = vi.spyOn(logger, 'error').mockReturnValue(undefined);
+      exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation((_code?: string | number | null) => undefined as never);
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('registers the save-acroform command', () => {
+      const program = buildProgram();
+      const cmd = program.commands.find((c) => c.name() === 'save-acroform');
+      expect(cmd).toBeDefined();
+    });
+
+    it('save-acroform has --output option', () => {
+      const program = buildProgram();
+      const cmd = program.commands.find((c) => c.name() === 'save-acroform');
+      const opt = cmd?.options.find((o) => o.long === '--output');
+      expect(opt).toBeDefined();
+    });
+
+    it('analyzes PDF when no .fpdf.json exists and writes acroform PDF', async () => {
+      const { existsSync } = await import('node:fs');
+      const { analyzePdf } = await import('../analyzer.js');
+      const { exportPdf } = await import('../exporter.js');
+      const { writeFile } = await import('node:fs/promises');
+
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(analyzePdf).mockResolvedValue(mockDoc);
+      const outBytes = new Uint8Array([37, 80, 68, 70]);
+      vi.mocked(exportPdf).mockResolvedValue(outBytes);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'save-acroform', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(analyzePdf).toHaveBeenCalledWith(expect.stringContaining('form.pdf'));
+      expect(exportPdf).toHaveBeenCalledWith(
+        expect.stringContaining('form.pdf'),
+        expect.anything(),
+        { readOnly: false },
+      );
+      expect(writeFile).toHaveBeenCalledWith(
+        expect.stringContaining('form.fpdf.acroform.pdf'),
+        outBytes,
+      );
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('form.fpdf.acroform.pdf'));
+    });
+
+    it('loads .fpdf.json and pre-fills when user accepts (default Y)', async () => {
+      const { existsSync } = await import('node:fs');
+      const { exportPdf } = await import('../exporter.js');
+      const { readFile } = await import('node:fs/promises');
+      const readline = await import('node:readline');
+
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(readline.createInterface).mockReturnValue({
+        question: vi.fn((_p: unknown, cb: (a: string) => void) => {
+          cb('');
+        }), // default Y
+        close: vi.fn(),
+      } as unknown as RlInterface);
+      vi.mocked(exportPdf).mockResolvedValue(new Uint8Array());
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'save-acroform', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // candidate field value 'Alice' should be preserved
+      const docArg = vi.mocked(exportPdf).mock.calls[0]?.[1];
+      expect(docArg?.pages[0]?.candidateFields[0]?.value).toBe('Alice');
+    });
+
+    it('clears field values when user answers n', async () => {
+      const { existsSync } = await import('node:fs');
+      const { exportPdf } = await import('../exporter.js');
+      const { readFile } = await import('node:fs/promises');
+      const readline = await import('node:readline');
+
+      const docWithValues = {
+        ...mockDoc,
+        pages: [
+          {
+            ...mockDoc.pages[0],
+            fields: [
+              {
+                id: 'f1',
+                name: 'FirstName',
+                type: 'text' as const,
+                label: 'First Name',
+                displayName: 'First Name',
+                placement: { x: 50, y: 700, width: 150, height: 14 },
+                value: 'Bob',
+                required: false,
+                readOnly: false,
+                options: [],
+              },
+            ],
+            candidateFields: [
+              {
+                id: 'c1',
+                type: 'text' as const,
+                label: 'Name',
+                displayName: 'Name',
+                placement: { x: 50, y: 700, width: 150, height: 14 },
+                value: 'Alice',
+                confidence: 'high' as const,
+                dismissed: false,
+              },
+            ],
+          },
+        ],
+      };
+
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(docWithValues) as never);
+      vi.mocked(readline.createInterface).mockReturnValue({
+        question: vi.fn((_p: unknown, cb: (a: string) => void) => {
+          cb('n');
+        }),
+        close: vi.fn(),
+      } as unknown as RlInterface);
+      vi.mocked(exportPdf).mockResolvedValue(new Uint8Array());
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'save-acroform', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const docArg = vi.mocked(exportPdf).mock.calls[0]?.[1];
+      expect(docArg?.pages[0]?.fields[0]?.value).toBe('');
+      expect(docArg?.pages[0]?.candidateFields[0]?.value).toBe('');
+    });
+
+    it('warns and skips export when pdfKind is acroform', async () => {
+      const { existsSync } = await import('node:fs');
+      const { analyzePdf } = await import('../analyzer.js');
+      const { exportPdf } = await import('../exporter.js');
+
+      const acroDoc = {
+        ...mockDoc,
+        metadata: { ...mockDoc.metadata, pdfKind: 'acroform' as const },
+      };
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(analyzePdf).mockResolvedValue(acroDoc);
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'save-acroform', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('already has AcroForm fields'));
+      expect(exportPdf).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    });
+
+    it('respects the --output flag', async () => {
+      const { existsSync } = await import('node:fs');
+      const { analyzePdf } = await import('../analyzer.js');
+      const { exportPdf } = await import('../exporter.js');
+      const { writeFile } = await import('node:fs/promises');
+
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(analyzePdf).mockResolvedValue(mockDoc);
+      vi.mocked(exportPdf).mockResolvedValue(new Uint8Array());
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'save-acroform', 'form.pdf', '--output', '/tmp/out.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(writeFile).toHaveBeenCalledWith('/tmp/out.pdf', expect.anything());
+    });
+
+    it('logs an error and exits when exportPdf rejects', async () => {
+      const { existsSync } = await import('node:fs');
+      const { analyzePdf } = await import('../analyzer.js');
+      const { exportPdf } = await import('../exporter.js');
+
+      vi.mocked(existsSync).mockReturnValue(false);
+      vi.mocked(analyzePdf).mockResolvedValue(mockDoc);
+      vi.mocked(exportPdf).mockRejectedValue(new Error('write failed'));
+
+      const program = buildProgram();
+      program.parse(['node', 'fpdf', 'save-acroform', 'form.pdf']);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(errorSpy).toHaveBeenCalledWith('write failed');
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
   });

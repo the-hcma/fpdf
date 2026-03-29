@@ -56,6 +56,10 @@ fpdf analyze form.pdf
 # Write filled values back into a new PDF
 fpdf export form.fpdf.json
 fpdf export form.fpdf.json -o filled.pdf
+
+# Export an editable AcroForm PDF (prompts to pre-fill from .fpdf.json if one exists)
+fpdf save-acroform form.pdf
+fpdf save-acroform form.pdf -o editable.pdf
 ```
 
 `fpdf fill` prints a local URL (e.g. `http://127.0.0.1:51234`) to stdout. Open it in any browser to start filling. The server binds to `127.0.0.1` only and uses an OS-assigned port.
@@ -104,6 +108,16 @@ fpdf export form.fpdf.json
 ```
 
 Writes filled values back into the original PDF and saves a new file alongside it (e.g. `form-filled.pdf`). Use `-o` to specify a different output path.
+
+### CLI save-acroform
+
+```bash
+fpdf save-acroform form.pdf
+```
+
+Exports the PDF as an editable AcroForm PDF saved as `<name>.fpdf.acroform.pdf` alongside the source. If a `.fpdf.json` session file exists, you are prompted whether to pre-fill the output with saved values (default: yes). Use `-o` to specify a different output path.
+
+If the PDF already has AcroForm fields, a warning is printed and no file is written — use `fpdf export` instead to write filled values back into an AcroForm PDF.
 
 ### Browser export buttons
 

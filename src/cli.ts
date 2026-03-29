@@ -270,6 +270,76 @@ export function buildProgram(): Command {
       });
     });
 
+  program
+    .command('save-acroform <file>')
+    .description('Export a PDF as an editable AcroForm PDF (pre-fills from .fpdf.json if present)')
+    .option(
+      '-o, --output <path>',
+      'Output path (default: <name>.fpdf.acroform.pdf alongside the PDF)',
+    )
+    .action((file: string, opts: { output?: string }) => {
+      const run = async (): Promise<void> => {
+        const pdfPath = path.resolve(file);
+        const stem = path.basename(pdfPath, path.extname(pdfPath));
+        const dir = path.dirname(pdfPath);
+        const defaultJsonPath = path.join(dir, `${stem}.fpdf.json`);
+        const outPath = opts.output
+          ? path.resolve(opts.output)
+          : path.join(dir, `${stem}.fpdf.acroform.pdf`);
+
+        let doc: FpdfDocument;
+
+        if (existsSync(defaultJsonPath)) {
+          const raw = await readFile(defaultJsonPath, 'utf-8');
+          const loaded = JSON.parse(raw) as FpdfDocument;
+
+          const cyan = process.stderr.isTTY ? '\x1b[36m' : '';
+          const reset = process.stderr.isTTY ? '\x1b[0m' : '';
+          const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+          const answer = await new Promise<string>((resolve) => {
+            rl.question(
+              `${cyan}[fpdf] Pre-fill with saved values from ${defaultJsonPath}? [Y/n]${reset} `,
+              (a) => {
+                rl.close();
+                resolve(a);
+              },
+            );
+          });
+
+          if (/^[Nn]/u.test(answer)) {
+            // Clear all field values
+            for (const page of loaded.pages) {
+              for (const field of page.fields) {
+                field.value = field.type === 'checkbox' || field.type === 'radio' ? false : '';
+              }
+              for (const candidate of page.candidateFields) {
+                candidate.value = '';
+              }
+            }
+          }
+          doc = loaded;
+        } else {
+          doc = await analyzePdf(pdfPath);
+        }
+
+        if (doc.metadata.pdfKind === 'acroform') {
+          logger.warn(
+            'This PDF already has AcroForm fields — no conversion needed. Use `fpdf export` to write filled values.',
+          );
+          return;
+        }
+
+        const filled = await exportPdf(pdfPath, doc, { readOnly: false });
+        await writeFile(outPath, filled);
+        logger.info(`Wrote ${outPath}`);
+      };
+      run().catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error(msg);
+        process.exit(1);
+      });
+    });
+
   // Note: `scripts/fpdf clean` intercepts this command before Node starts so it
   // works even when node_modules/dist are missing.  This registration keeps
   // `fpdf clean` available when invoking dist/cli.js directly (e.g. in tests).

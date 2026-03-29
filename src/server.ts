@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { logger } from './logger.js';
-import { exportPdf } from './exporter.js';
+import { exportPdf, exportFromImages, ExportError, type RenderedPage } from './exporter.js';
 import { regenerateAsAcroForm } from './regenerator.js';
 import type { FpdfDocument } from './types.js';
 
@@ -41,7 +41,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   let currentJsonPath = options.jsonPath;
 
   const app = express();
-  app.use(express.json());
+  app.use(express.json({ limit: '50mb' }));
 
   // --- PDF bytes ---
   app.get('/pdf', (_req, res) => {
@@ -68,8 +68,13 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       res.end(Buffer.from(filled));
     };
     run().catch((err: unknown) => {
-      logger.error(`Failed to export PDF: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: 'Failed to export PDF' });
+      const msg = err instanceof Error ? err.message : String(err);
+      if (err instanceof ExportError) {
+        logger.debug(`Primary export unavailable, client will use canvas fallback: ${msg}`);
+      } else {
+        logger.error(`Failed to export PDF: ${msg}`);
+      }
+      res.status(500).json({ error: err instanceof ExportError ? msg : 'Failed to export PDF' });
     });
   });
 
@@ -105,8 +110,37 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       res.json({ ok: true, path: outPath });
     };
     run().catch((err: unknown) => {
-      logger.error(`save-acroform failed: ${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(`save-acroform failed: ${msg}`);
+      res.status(500).json({ error: msg });
+    });
+  });
+
+  // --- Canvas-based fallback export (encrypted PDFs) ---
+  // Accepts pre-rendered page images from the browser and assembles a new PDF.
+  app.post('/export-canvas', (_req, res) => {
+    const run = async (): Promise<void> => {
+      const body = _req.body as { pages?: { jpeg: string; widthPt: number; heightPt: number }[] };
+      if (!Array.isArray(body.pages) || body.pages.length === 0) {
+        res.status(400).json({ error: 'Missing pages array' });
+        return;
+      }
+      const pages: RenderedPage[] = body.pages.map((p) => ({
+        jpeg: new Uint8Array(Buffer.from(p.jpeg, 'base64')),
+        widthPt: p.widthPt,
+        heightPt: p.heightPt,
+      }));
+      const filled = await exportFromImages(pages, liveDoc);
+      const filename = `${path.basename(currentPdfPath, path.extname(currentPdfPath))}-filled.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Length', String(filled.length));
+      res.end(Buffer.from(filled));
+    };
+    run().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(`export-canvas failed: ${msg}`);
+      res.status(500).json({ error: msg });
     });
   });
 

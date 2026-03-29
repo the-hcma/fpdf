@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
 import * as path from 'node:path';
-import { PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
 import { analyzePdf, AnalyzerError } from '../analyzer.js';
 import { makePdfBytes, writeTempPdf, MINIMAL_JPEG } from './helpers.js';
 
@@ -736,5 +736,52 @@ describe('orphan widget extraction (integration)', () => {
   it('orphan page has empty candidateFields (acroform suppresses vector detection)', async () => {
     const doc = await analyzePdf(orphanWidgetPdfPath);
     expect(doc.pages[0]?.candidateFields).toEqual([]);
+  });
+});
+
+describe('pdf-lib fallback (encrypted/corrupted PDFs)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('succeeds via pdfjs-dist when pdf-lib cannot parse the PDF', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = await analyzePdf(vectorRectPdfPath);
+    expect(doc.metadata.pageCount).toBe(1);
+    expect(doc.pages).toHaveLength(1);
+    expect(doc.pages[0]?.widthPt).toBe(612);
+    expect(doc.pages[0]?.heightPt).toBe(792);
+  });
+
+  it('sets pdfKind to no-acroform when pdf-lib is unavailable', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = await analyzePdf(vectorRectPdfPath);
+    expect(doc.metadata.pdfKind).toBe('no-acroform');
+  });
+
+  it('still extracts textBlocks when pdf-lib fails', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = await analyzePdf(vectorRectPdfPath);
+    const blocks = doc.pages[0]?.textBlocks ?? [];
+    expect(blocks.some((b) => b.text.includes('Amount'))).toBe(true);
+  });
+
+  it('still detects candidateFields when pdf-lib fails', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = await analyzePdf(vectorRectPdfPath);
+    expect((doc.pages[0]?.candidateFields ?? []).length).toBeGreaterThan(0);
+  });
+
+  it('has no AcroForm fields when pdf-lib fails', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = await analyzePdf(textFieldPdfPath);
+    const fields = doc.pages[0]?.fields ?? [];
+    expect(fields).toHaveLength(0);
+  });
+
+  it('detects page type via pdfjs-dist when pdf-lib fails', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = await analyzePdf(rasterPdfPath);
+    expect(doc.pages[0]?.pageType).toBe('raster');
   });
 });

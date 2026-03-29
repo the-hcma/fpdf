@@ -1639,16 +1639,24 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     );
   }
 
-  let pdfDoc: PDFDocument;
+  // pdf-lib: used for AcroForm/XFA extraction. Nullable — some encrypted or
+  // malformed PDFs can't be parsed by pdf-lib but work fine in pdfjs-dist.
+  let pdfDoc: PDFDocument | null = null;
   try {
-    pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  } catch (err) {
-    throw new AnalyzerError(
-      `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`,
+    const loaded = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    // Probe the page tree — pdf-lib may "load" a corrupted/encrypted PDF without
+    // throwing, but accessing the catalog later explodes. Fail fast here so we
+    // fall through to the pdfjs-dist-only path.
+    loaded.getPageCount();
+    pdfDoc = loaded;
+  } catch {
+    logger.warn(
+      `pdf-lib could not parse ${path.basename(absPath)}; AcroForm extraction will be skipped`,
     );
   }
 
-  // Load with pdfjs-dist for text extraction (best-effort; errors leave textBlocks empty).
+  // pdfjs-dist: used for page rendering, text extraction, and candidate field detection.
+  // When pdf-lib fails this is the sole source of page dimensions and content.
   let pdfjsDoc: Awaited<ReturnType<typeof getDocument>['promise']> | null = null;
   try {
     pdfjsDoc = await getDocument({
@@ -1664,19 +1672,29 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
   const now = new Date().toISOString();
   const pdfFilename = path.basename(absPath);
   const pdfHash = `sha256:${sha256Hex(bytes)}`;
-  const pageCount = pdfDoc.getPageCount();
 
-  // Build a map: page PDFRef objectNumber → 1-based page index.
+  let pageCount: number;
+  if (pdfDoc !== null) {
+    pageCount = pdfDoc.getPageCount();
+  } else if (pdfjsDoc !== null) {
+    pageCount = pdfjsDoc.numPages;
+  } else {
+    throw new AnalyzerError(`Neither pdf-lib nor pdfjs-dist could parse ${path.basename(absPath)}`);
+  }
+
+  // Build a map: page PDFRef objectNumber → 1-based page index (pdf-lib only).
   const pageRefToNum = new Map<number, number>();
-  for (let i = 0; i < pageCount; i++) {
-    const pageRef = pdfDoc.getPage(i).ref;
-    pageRefToNum.set(pageRef.objectNumber, i + 1);
+  if (pdfDoc !== null) {
+    for (let i = 0; i < pageCount; i++) {
+      const pageRef = pdfDoc.getPage(i).ref;
+      pageRefToNum.set(pageRef.objectNumber, i + 1);
+    }
   }
 
   // Check for XFA BEFORE calling getForm() — pdf-lib's getForm() deletes /AcroForm/XFA.
   // For XFA PDFs: include read-only AcroForm widgets (they're locked for non-XFA editors
   // but ARE user-editable via XFA), and source values from the datasets XML instead of /V.
-  const xfaDatasetsInfo = getXfaDatasetsInfo(pdfDoc);
+  const xfaDatasetsInfo = pdfDoc !== null ? getXfaDatasetsInfo(pdfDoc) : null;
   const xfaValues = xfaDatasetsInfo ? parseXfaDatasetValues(xfaDatasetsInfo.xml) : null;
   const isXfaPdf = xfaValues !== null;
 
@@ -1686,85 +1704,88 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
     pageFields.set(p, []);
   }
 
-  const form = pdfDoc.getForm();
-  let rawFields: PDFField[];
-  try {
-    rawFields = form.getFields();
-  } catch {
-    rawFields = []; // malformed /AcroForm — fall through to orphan walk
-  }
-
-  for (const field of rawFields) {
-    const type = fieldTypeFor(field);
-    if (type === null) continue; // skip button/signature widgets
-    // For XFA PDFs, include read-only fields (they're editable via XFA, just locked for
-    // non-XFA editors).  For non-XFA PDFs, skip display-only fields as before.
-    if (!isXfaPdf && field.isReadOnly()) continue;
-    const value = isXfaPdf
-      ? (xfaValues.get(xfaLeafName(field.getName())) ?? fieldValue(field))
-      : fieldValue(field);
-    const options = fieldOptions(field);
-    const widgets = field.acroField.getWidgets();
-
-    for (const widget of widgets) {
-      const rect = widget.getRectangle();
-      const placement: Placement = {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width,
-        height: rect.height,
-      };
-
-      // P() returns the PDFRef of the page this widget appears on.
-      const pageRef = widget.P();
-      const pageNum = pageRef ? (pageRefToNum.get(pageRef.objectNumber) ?? 1) : 1;
-
-      const label = deriveLabel(field.getName());
-      const tuEntry = field.acroField.dict.lookupMaybe(PDFName.of('TU'), PDFString);
-      const tooltip = tuEntry ? tuEntry.decodeText().trim() : undefined;
-
-      const daEntry = field.acroField.dict.lookupMaybe(PDFName.of('DA'), PDFString);
-      const { fontName, fontSize } = parseDa(daEntry?.decodeText());
-
-      // For radio widgets, record the specific option (on-value) this widget
-      // represents so the UI can render each button correctly and store the
-      // selected option string instead of a boolean.
-      const radioValue =
-        type === 'radio' ? (widget.getOnValue()?.decodeText() ?? undefined) : undefined;
-
-      const pdfField: PdfField = {
-        id: randomUUID(),
-        name: field.getName(),
-        type,
-        label,
-        displayName: deriveDisplayName(label),
-        ...(tooltip ? { tooltip } : {}),
-        placement,
-        value,
-        required: field.isRequired(),
-        // XFA marks AcroForm widgets as ReadOnly to block non-XFA editors;
-        // surface them as editable since the exporter will write via XFA datasets.
-        readOnly: isXfaPdf ? false : field.isReadOnly(),
-        options,
-        ...(radioValue !== undefined ? { radioValue } : {}),
-        ...(fontName !== undefined ? { fontName } : {}),
-        ...(fontSize !== undefined ? { fontSize } : {}),
-      };
-
-      const bucket = pageFields.get(pageNum) ?? pageFields.get(1);
-      if (bucket) bucket.push(pdfField);
+  // AcroForm field extraction (requires pdf-lib).
+  if (pdfDoc !== null) {
+    const form = pdfDoc.getForm();
+    let rawFields: PDFField[];
+    try {
+      rawFields = form.getFields();
+    } catch {
+      rawFields = []; // malformed /AcroForm — fall through to orphan walk
     }
-  }
 
-  // Orphan widget fallback: walk each page's raw /Annots array to pick up Widget
-  // annotations not reachable via form.getFields() (broken /AcroForm field tree).
-  const knownNames = new Set(rawFields.map((f) => f.getName()));
-  for (let p = 1; p <= pageCount; p++) {
-    const orphans = extractOrphanWidgets(pdfDoc, p, knownNames);
-    if (orphans.length > 0) {
-      const bucket = pageFields.get(p) ?? [];
-      bucket.push(...orphans);
-      pageFields.set(p, bucket);
+    for (const field of rawFields) {
+      const type = fieldTypeFor(field);
+      if (type === null) continue; // skip button/signature widgets
+      // For XFA PDFs, include read-only fields (they're editable via XFA, just locked for
+      // non-XFA editors).  For non-XFA PDFs, skip display-only fields as before.
+      if (!isXfaPdf && field.isReadOnly()) continue;
+      const value = isXfaPdf
+        ? (xfaValues.get(xfaLeafName(field.getName())) ?? fieldValue(field))
+        : fieldValue(field);
+      const options = fieldOptions(field);
+      const widgets = field.acroField.getWidgets();
+
+      for (const widget of widgets) {
+        const rect = widget.getRectangle();
+        const placement: Placement = {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        };
+
+        // P() returns the PDFRef of the page this widget appears on.
+        const pageRef = widget.P();
+        const pageNum = pageRef ? (pageRefToNum.get(pageRef.objectNumber) ?? 1) : 1;
+
+        const label = deriveLabel(field.getName());
+        const tuEntry = field.acroField.dict.lookupMaybe(PDFName.of('TU'), PDFString);
+        const tooltip = tuEntry ? tuEntry.decodeText().trim() : undefined;
+
+        const daEntry = field.acroField.dict.lookupMaybe(PDFName.of('DA'), PDFString);
+        const { fontName, fontSize } = parseDa(daEntry?.decodeText());
+
+        // For radio widgets, record the specific option (on-value) this widget
+        // represents so the UI can render each button correctly and store the
+        // selected option string instead of a boolean.
+        const radioValue =
+          type === 'radio' ? (widget.getOnValue()?.decodeText() ?? undefined) : undefined;
+
+        const pdfField: PdfField = {
+          id: randomUUID(),
+          name: field.getName(),
+          type,
+          label,
+          displayName: deriveDisplayName(label),
+          ...(tooltip ? { tooltip } : {}),
+          placement,
+          value,
+          required: field.isRequired(),
+          // XFA marks AcroForm widgets as ReadOnly to block non-XFA editors;
+          // surface them as editable since the exporter will write via XFA datasets.
+          readOnly: isXfaPdf ? false : field.isReadOnly(),
+          options,
+          ...(radioValue !== undefined ? { radioValue } : {}),
+          ...(fontName !== undefined ? { fontName } : {}),
+          ...(fontSize !== undefined ? { fontSize } : {}),
+        };
+
+        const bucket = pageFields.get(pageNum) ?? pageFields.get(1);
+        if (bucket) bucket.push(pdfField);
+      }
+    }
+
+    // Orphan widget fallback: walk each page's raw /Annots array to pick up Widget
+    // annotations not reachable via form.getFields() (broken /AcroForm field tree).
+    const knownNames = new Set(rawFields.map((f) => f.getName()));
+    for (let p = 1; p <= pageCount; p++) {
+      const orphans = extractOrphanWidgets(pdfDoc, p, knownNames);
+      if (orphans.length > 0) {
+        const bucket = pageFields.get(p) ?? [];
+        bucket.push(...orphans);
+        pageFields.set(p, bucket);
+      }
     }
   }
 
@@ -1773,8 +1794,18 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
 
   const pages: PdfPage[] = [];
   for (let p = 1; p <= pageCount; p++) {
-    const page = pdfDoc.getPage(p - 1);
-    const { width, height } = page.getSize();
+    // Page dimensions: prefer pdf-lib (exact PDF MediaBox), fall back to pdfjs-dist viewport.
+    let width: number;
+    let height: number;
+    if (pdfDoc !== null) {
+      ({ width, height } = pdfDoc.getPage(p - 1).getSize());
+    } else if (pdfjsDoc !== null) {
+      const vp = (await pdfjsDoc.getPage(p)).getViewport({ scale: 1 });
+      width = vp.width;
+      height = vp.height;
+    } else {
+      throw new Error('unreachable: both parsers null');
+    }
 
     let textBlocks: TextBlock[] = [];
     let pageType: PageType = 'vector';

@@ -116,13 +116,30 @@ import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from 
  * string (the selected option identity).  Boolean values written by the UI lack
  * the option name and are skipped; see types.ts for the field value model.
  */
+/** Thrown when the PDF cannot be exported (e.g. encrypted and unreadable by pdf-lib). */
+export class ExportError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ExportError';
+  }
+}
+
 export async function exportPdf(
   pdfPath: string,
   doc: FpdfDocument,
   options: { readOnly?: boolean } = {},
 ): Promise<Uint8Array> {
   const bytes = await readFile(pdfPath);
-  const pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  let pdfDoc: PDFDocument;
+  try {
+    pdfDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+    pdfDoc.getPageCount(); // probe — encrypted PDFs load but fail on access
+  } catch {
+    throw new ExportError(
+      'This PDF is encrypted and cannot be modified for export. ' +
+        'Use your browser\u2019s Print function (Ctrl+P / Cmd+P) to save a filled copy.',
+    );
+  }
 
   // Determine XFA branch using the stored pdfKind when available (new .fpdf.json).
   // Fall back to runtime detection for old files that predate the pdfKind field.
@@ -807,4 +824,87 @@ function writeOrphanWidgetValues(
       }
     }
   }
+}
+
+/**
+ * Rendered-image page data sent from the browser when pdf-lib cannot modify
+ * the original PDF (encrypted or corrupted).
+ */
+export interface RenderedPage {
+  /** JPEG bytes for the rendered page. */
+  jpeg: Uint8Array;
+  /** Page width in PDF points. */
+  widthPt: number;
+  /** Page height in PDF points. */
+  heightPt: number;
+}
+
+/**
+ * Create a new PDF from pre-rendered page images and stamp candidate field
+ * values on top.  Used as a fallback when pdf-lib cannot load the original
+ * PDF (e.g. encrypted).  The browser captures each page canvas as JPEG and
+ * sends it here; this function assembles them into a proper PDF with text
+ * values drawn at the correct positions.
+ */
+export async function exportFromImages(
+  pages: RenderedPage[],
+  doc: FpdfDocument,
+): Promise<Uint8Array> {
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const COLOR = rgb(0, 0, 0);
+
+  for (let i = 0; i < pages.length; i++) {
+    const rp = pages[i];
+    if (!rp) continue;
+    const { jpeg, widthPt, heightPt } = rp;
+    const img = await pdfDoc.embedJpg(jpeg);
+    const page = pdfDoc.addPage([widthPt, heightPt]);
+    page.drawImage(img, { x: 0, y: 0, width: widthPt, height: heightPt });
+
+    const docPage = doc.pages[i];
+    if (!docPage) continue;
+
+    for (const c of docPage.candidateFields) {
+      if (c.dismissed) continue;
+      const { x, y, width, height } = c.placement;
+
+      if (c.type === 'checkbox' && c.value === true) {
+        const mark = 'X';
+        const markSize = Math.max(6, Math.round(height * 0.8));
+        page.drawText(mark, {
+          x: x + (width - font.widthOfTextAtSize(mark, markSize)) / 2,
+          y: y + (height - markSize) / 2,
+          size: markSize,
+          font,
+          color: COLOR,
+        });
+      } else if (typeof c.value === 'string' && c.value.trim() !== '') {
+        const value = c.value;
+        let size = Math.max(6, Math.round(height * 0.7));
+        while (size > 6 && font.widthOfTextAtSize(value, size) > width - FIELD_PADDING * 2) {
+          size -= 0.5;
+        }
+        const textWidth = font.widthOfTextAtSize(value, size);
+        let textX: number;
+        if (c.textAlign === 'center') {
+          textX = x + (width - textWidth) / 2;
+        } else if (c.textAlign === 'right') {
+          textX = x + width - textWidth - FIELD_PADDING;
+        } else {
+          textX = x + FIELD_PADDING;
+        }
+        page.drawText(value, {
+          x: textX,
+          y: y + FIELD_PADDING,
+          size,
+          font,
+          color: COLOR,
+          maxWidth: width - FIELD_PADDING * 2,
+        });
+      }
+    }
+  }
+
+  return pdfDoc.save();
 }

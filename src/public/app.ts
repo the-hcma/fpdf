@@ -1015,12 +1015,12 @@ function initEditInteractions(
           label: 'Font',
           submenu: (
             [
-              { label: 'Helvetica', value: 'Helvetica' },
-              { label: 'Helvetica Bold', value: 'HelveticaBold' },
-              { label: 'Times Roman', value: 'TimesRoman' },
-              { label: 'Times Bold', value: 'TimesRomanBold' },
               { label: 'Courier', value: 'Courier' },
               { label: 'Courier Bold', value: 'CourierBold' },
+              { label: 'Helvetica', value: 'Helvetica' },
+              { label: 'Helvetica Bold', value: 'HelveticaBold' },
+              { label: 'Times Bold', value: 'TimesRomanBold' },
+              { label: 'Times Roman', value: 'TimesRoman' },
             ] as { label: string; value: string }[]
           ).map(({ label, value }) => ({
             label,

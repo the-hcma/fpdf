@@ -160,7 +160,8 @@ function initWebSocket(
 // ── Field rendering ───────────────────────────────────────────────────────────
 
 const FONT_RATIO = 0.72;
-const MIN_FONT_SIZE = 6; // px — never shrink below this
+const MIN_FONT_SIZE = 4; // px — lower bound; allows small fonts for dense fields
+const MAX_EXPORT_FONT_PT = 12; // pt — must match exporter's MAX_FONT_SIZE
 
 /**
  * Measure the rendered width of a string at a given font size using an
@@ -205,8 +206,13 @@ function fitFontToBox(el: HTMLElement): void {
       const family = getComputedStyle(el).fontFamily;
       const textWidth = measureTextWidth(el.value, maxSize, family);
       if (textWidth > cw) {
-        // Scale down proportionally, then clamp to minimum.
+        // Proportional initial estimate, then iterate down to guarantee fit.
+        // The one-shot formula can land at a size that still overflows due to
+        // sub-pixel rounding or font-metric non-linearity at small sizes.
         size = Math.max(MIN_FONT_SIZE, Math.floor(maxSize * (cw / textWidth)));
+        while (size > MIN_FONT_SIZE && measureTextWidth(el.value, size, family) > cw) {
+          size -= 1;
+        }
       }
     }
     el.style.fontSize = `${String(size)}px`;
@@ -735,7 +741,10 @@ function attachResize(
     // Keep font size proportional to the new height
     const inputEl = wrapper.querySelector<HTMLElement>('[data-max-font-size]');
     if (inputEl) {
-      const maxSize = Math.round(height * scale * FONT_RATIO);
+      const maxSize = Math.min(
+        Math.round(height * scale * FONT_RATIO),
+        Math.round(MAX_EXPORT_FONT_PT * scale),
+      );
       inputEl.dataset.maxFontSize = String(maxSize);
       fitFontToBox(inputEl);
     }
@@ -1109,7 +1118,10 @@ function buildFieldElement(
   // Scale font size for text-like fields so text visually fits the PDF bounding box.
   // Store the max size so fitFontToBox can reset to it and shrink as needed.
   if (field.type === 'text' || field.type === 'textarea') {
-    const maxSize = Math.round(field.placement.height * scale * FONT_RATIO);
+    const maxSize = Math.min(
+      Math.round(field.placement.height * scale * FONT_RATIO),
+      Math.round(MAX_EXPORT_FONT_PT * scale),
+    );
     el.dataset.maxFontSize = String(maxSize);
     el.style.fontSize = `${String(maxSize)}px`;
     (el as HTMLInputElement | HTMLTextAreaElement).addEventListener('dblclick', () => {
@@ -1193,7 +1205,10 @@ function buildCandidateFieldElement(
   el.dataset.candidate = 'true';
 
   if (field.type === 'text' || field.type === 'textarea') {
-    const maxSize = Math.round(field.placement.height * scale * FONT_RATIO);
+    const maxSize = Math.min(
+      Math.round(field.placement.height * scale * FONT_RATIO),
+      Math.round(MAX_EXPORT_FONT_PT * scale),
+    );
     el.dataset.maxFontSize = String(maxSize);
     el.style.fontSize = `${String(maxSize)}px`;
     (el as HTMLInputElement | HTMLTextAreaElement).addEventListener('dblclick', () => {
@@ -1246,21 +1261,24 @@ async function renderPage(
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
 
+  // Collect input elements that need font fitting; we run fitFontToBox after
+  // the wrapper is in the document so scrollHeight / clientWidth are non-zero.
+  const pendingFitEls: HTMLElement[] = [];
+
   const scale = viewport.width / docPage.widthPt;
   for (const field of docPage.fields) {
     if (field.readOnly) continue;
     const fieldWrapper = buildFieldElement(field, docPage, scale, onDirty);
     overlay.appendChild(fieldWrapper);
-    // Fit font for pre-filled values once the element is in the DOM.
     const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
-    if (inputEl) fitFontToBox(inputEl);
+    if (inputEl) pendingFitEls.push(inputEl);
   }
   for (const field of docPage.candidateFields) {
     if (field.dismissed || field.confidence === 'low') continue;
     const fieldWrapper = buildCandidateFieldElement(field, docPage, scale, onDirty);
     overlay.appendChild(fieldWrapper);
     const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
-    if (inputEl) fitFontToBox(inputEl);
+    if (inputEl) pendingFitEls.push(inputEl);
   }
 
   const pageLabel = document.createElement('div');
@@ -1275,6 +1293,10 @@ async function renderPage(
   wrapper.appendChild(overlay);
   container.appendChild(pageLabel);
   container.appendChild(wrapper);
+
+  // Now that the elements are in the document and have non-zero dimensions,
+  // shrink any pre-filled fields whose content overflows the bounding box.
+  for (const el of pendingFitEls) fitFontToBox(el);
 }
 
 // ── Input change tracking ─────────────────────────────────────────────────────

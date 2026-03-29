@@ -355,6 +355,26 @@ body {
   display: none;
 }
 
+/* ── Toolbar tooltip ── */
+
+#toolbar-tooltip {
+  position: fixed;
+  background: rgba(30, 30, 30, 0.92);
+  color: #fff;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 1000;
+  max-width: 240px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+#toolbar-tooltip[hidden] {
+  display: none;
+}
+
 /* ── Context menu ── */
 
 .field-context-menu {

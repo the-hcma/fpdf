@@ -1660,7 +1660,22 @@ async function main(): Promise<void> {
     setStatus(`${baseText} · Saving…`);
     sendSave(fpdfDoc);
   }, 800);
+  // Snapshot saved by "Clear fields" so the action can be undone.
+  let clearSnapshot: Map<string, string | boolean> | null = null;
+
+  function resetClearButton(): void {
+    const btn = document.getElementById('clear-fields') as HTMLButtonElement | null;
+    if (!btn) return;
+    btn.textContent = '✕';
+    btn.title = 'Clear all field values';
+    btn.ariaLabel = 'Clear all field values';
+  }
+
   const onDirty = (): void => {
+    if (clearSnapshot !== null) {
+      clearSnapshot = null;
+      resetClearButton();
+    }
     setStatus(`${baseText} · Unsaved changes`);
     setSaveButtonDirty(true);
     debouncedSave();
@@ -1833,7 +1848,61 @@ async function main(): Promise<void> {
     sendSave(fpdfDoc);
   });
 
-  document.getElementById('clear-fields')?.addEventListener('click', () => {
+  const clearBtn = document.getElementById('clear-fields') as HTMLButtonElement | null;
+
+  function applyFieldValues(snapshot: Map<string, string | boolean>): void {
+    for (const field of fieldById.values()) {
+      const val = snapshot.get(field.id);
+      if (val === undefined) continue;
+      field.value = val;
+      const el = document.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
+      if (!el) continue;
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        el.checked = val === true;
+      } else if (el instanceof HTMLInputElement && el.type === 'radio') {
+        el.checked = val === true;
+      } else {
+        (el as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value = String(val);
+        fitFontToBox(el);
+      }
+    }
+    for (const field of candidateById.values()) {
+      const val = snapshot.get(field.id);
+      if (val === undefined) continue;
+      field.value = val;
+      const el = document.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
+      if (!el) continue;
+      if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+        el.checked = val === true;
+      } else {
+        (el as HTMLInputElement | HTMLTextAreaElement).value = String(val);
+        fitFontToBox(el);
+      }
+    }
+  }
+
+  clearBtn?.addEventListener('click', () => {
+    if (clearSnapshot !== null) {
+      // Undo mode: restore snapshot
+      applyFieldValues(clearSnapshot);
+      clearSnapshot = null;
+      resetClearButton();
+      setStatus(`${baseText} · Unsaved changes`);
+      setSaveButtonDirty(true);
+      debouncedSave();
+      return;
+    }
+
+    // Save snapshot before clearing
+    const snapshot = new Map<string, string | boolean>();
+    for (const field of fieldById.values()) {
+      snapshot.set(field.id, field.value);
+    }
+    for (const field of candidateById.values()) {
+      snapshot.set(field.id, field.value);
+    }
+
+    // Clear all fields
     for (const field of fieldById.values()) {
       field.value = field.type === 'checkbox' ? false : '';
       const el = document.querySelector<HTMLElement>(`[data-field-id="${field.id}"]`);
@@ -1858,6 +1927,13 @@ async function main(): Promise<void> {
         fitFontToBox(el);
       }
     }
+
+    // Flip button to undo mode
+    clearSnapshot = snapshot;
+    clearBtn.textContent = '↩';
+    clearBtn.title = 'Undo clear';
+    clearBtn.ariaLabel = 'Undo clear';
+
     setStatus(`${baseText} · Unsaved changes`);
     setSaveButtonDirty(true);
     debouncedSave();

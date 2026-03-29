@@ -7,7 +7,11 @@
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 // Messages from third-party libraries we intentionally suppress.
-const SUPPRESSED_WARN_PATTERNS = [/Removing XFA form data as pdf-lib does not support/];
+const SUPPRESSED_WARN_PATTERNS = [
+  /Removing XFA form data as pdf-lib does not support/,
+  /Trying to parse invalid object/,
+  /Invalid object ref/,
+];
 
 /**
  * Install a console.warn filter that drops known noisy third-party messages.

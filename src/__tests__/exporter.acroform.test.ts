@@ -1,7 +1,7 @@
 // integration
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { exportPdf } from '../exporter.js';
+import { exportPdf, ExportError } from '../exporter.js';
 import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
 import { makePdfBytes, writeTempPdf } from './helpers.js';
 
@@ -289,5 +289,25 @@ describe('exportPdf', () => {
     const bytes = await exportPdf(narrowTextPdfPath, doc);
     const result = await PDFDocument.load(bytes);
     expect(result.getForm().getTextField('narrow').getText()).toBe(value);
+  });
+});
+
+describe('encrypted PDF export', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('throws ExportError when pdf-lib cannot parse the PDF', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = makeDoc([]);
+    doc.metadata.originalPdf = textPdfPath;
+    await expect(exportPdf(textPdfPath, doc)).rejects.toBeInstanceOf(ExportError);
+  });
+
+  it('includes a user-friendly message suggesting browser print', async () => {
+    vi.spyOn(PDFDocument, 'load').mockRejectedValue(new Error('simulated encryption failure'));
+    const doc = makeDoc([]);
+    doc.metadata.originalPdf = textPdfPath;
+    await expect(exportPdf(textPdfPath, doc)).rejects.toThrow(/Print function/);
   });
 });

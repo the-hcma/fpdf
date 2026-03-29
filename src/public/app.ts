@@ -1582,6 +1582,44 @@ function updateToggleLabel(): void {
   btn.title = showing ? 'Hide field highlights' : 'Highlight fillable fields';
 }
 
+// ── Canvas-based fallback export ──────────────────────────────────────────
+
+/**
+ * Capture each rendered page canvas as a JPEG, POST them to the server, and
+ * return the resulting PDF blob.  Used when the primary /filled-pdf export
+ * fails because pdf-lib cannot modify the original encrypted PDF.
+ */
+async function exportViaCanvas(fpdfDoc: FpdfDocument, pagesContainer: HTMLElement): Promise<Blob> {
+  const canvases = pagesContainer.querySelectorAll<HTMLCanvasElement>('.page-wrapper canvas');
+  if (canvases.length === 0) throw new Error('No rendered pages found');
+
+  const pages: { jpeg: string; widthPt: number; heightPt: number }[] = [];
+
+  for (let i = 0; i < canvases.length; i++) {
+    const canvas = canvases[i];
+    if (!canvas) continue;
+    const docPage = fpdfDoc.pages[i];
+    if (!docPage) continue;
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
+    pages.push({ jpeg: base64, widthPt: docPage.widthPt, heightPt: docPage.heightPt });
+  }
+
+  const res = await fetch('/export-canvas', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pages }),
+  });
+
+  if (!res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? 'Canvas export failed');
+  }
+
+  return res.blob();
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -1942,7 +1980,48 @@ async function main(): Promise<void> {
   });
 
   document.getElementById('export-pdf')?.addEventListener('click', () => {
-    window.open('/filled-pdf', '_blank');
+    const exportBtn = document.getElementById('export-pdf') as HTMLButtonElement | null;
+    if (exportBtn) {
+      exportBtn.disabled = true;
+      exportBtn.textContent = 'Exporting\u2026';
+    }
+
+    const resetExportBtn = (): void => {
+      if (exportBtn) {
+        exportBtn.disabled = false;
+        exportBtn.textContent = 'Export PDF';
+      }
+    };
+
+    fetch('/filled-pdf')
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = (await r.json()) as { error?: string };
+          throw new Error(body.error ?? 'Export failed');
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        window.open(url, '_blank');
+        resetExportBtn();
+      })
+      .catch((primaryErr: unknown) => {
+        const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+        if (!errMsg.includes('encrypted')) {
+          resetExportBtn();
+          showError(errMsg);
+          return;
+        }
+        exportViaCanvas(fpdfDoc, pagesContainer)
+          .then((blob) => {
+            const url = URL.createObjectURL(blob);
+            window.open(url, '_blank');
+            resetExportBtn();
+          })
+          .catch((canvasErr: unknown) => {
+            resetExportBtn();
+            showError(canvasErr instanceof Error ? canvasErr.message : String(canvasErr));
+          });
+      });
   });
 }
 

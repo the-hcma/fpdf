@@ -19,7 +19,7 @@ function initDarkToggle(): void {
 
   function updateButton(b: HTMLElement): void {
     const isDark = document.body.dataset.theme === 'dark';
-    b.textContent = isDark ? 'Light mode' : 'Dark mode';
+    b.textContent = isDark ? '☀' : '☾';
   }
 
   updateButton(btn);
@@ -1789,6 +1789,38 @@ async function main(): Promise<void> {
       showWarning(
         'This PDF has no AcroForm fields. Detected field positions are approximate — click a field to adjust its layout. Use "Export PDF" to write values as interactive AcroForm fields.',
       );
+    }
+  }
+
+  // Show "Save AcroForm" for every PDF kind except pure acroform (which is
+  // already a standard AcroForm and doesn't need conversion).
+  if (pdfKind !== 'acroform') {
+    const saveAcroFormBtn = document.getElementById('save-acroform') as HTMLButtonElement | null;
+    if (saveAcroFormBtn) {
+      saveAcroFormBtn.hidden = false;
+      saveAcroFormBtn.addEventListener('click', () => {
+        saveAcroFormBtn.disabled = true;
+        saveAcroFormBtn.textContent = 'Saving\u2026';
+        fetch('/save-acroform', { method: 'POST' })
+          .then(async (r) => {
+            if (!r.ok) {
+              const body = (await r.json()) as { error?: string };
+              throw new Error(body.error ?? 'Save failed');
+            }
+            const body = (await r.json()) as { path?: string };
+            saveAcroFormBtn.textContent = 'Saved!';
+            setStatus(`AcroForm PDF saved \u2192 ${body.path ?? ''}`);
+            setTimeout(() => {
+              saveAcroFormBtn.disabled = false;
+              saveAcroFormBtn.textContent = 'Save AcroForm';
+            }, 3000);
+          })
+          .catch((err: unknown) => {
+            showError(err instanceof Error ? err.message : String(err));
+            saveAcroFormBtn.disabled = false;
+            saveAcroFormBtn.textContent = 'Save AcroForm';
+          });
+      });
     }
   }
 

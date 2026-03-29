@@ -296,6 +296,38 @@ describe('startServer', () => {
     });
   });
 
+  describe('POST /save-acroform', () => {
+    it('returns { ok: true, path } and writes the file to disk', async () => {
+      const dir = path.join(tmpdir(), 'fpdf-server-save-acroform-success');
+      await mkdir(dir, { recursive: true });
+      const pdfFile = path.join(dir, 'form.pdf');
+      const jsonFile = path.join(dir, 'form.fpdf.json');
+      const plainBytes = await PDFDocument.create().then((d) => {
+        d.addPage([612, 792]);
+        return d.save();
+      });
+      await writeFile(pdfFile, plainBytes);
+      const saveDoc: FpdfDocument = {
+        ...MOCK_DOC,
+        metadata: { ...MOCK_DOC.metadata, originalPdf: pdfFile, pdfFilename: 'form.pdf' },
+      };
+      await writeFile(jsonFile, JSON.stringify(saveDoc, null, 2), 'utf-8');
+
+      const h = await startServer({ pdfPath: pdfFile, doc: saveDoc, jsonPath: jsonFile });
+      try {
+        const res = await fetch(`${h.url}/save-acroform`, { method: 'POST' });
+        expect(res.status).toBe(200);
+        const body = (await res.json()) as { ok: boolean; path: string };
+        expect(body.ok).toBe(true);
+        expect(body.path).toMatch(/form\.fpdf\.acroform\.pdf$/);
+        const saved = await readFile(body.path);
+        expect(Buffer.from(saved).subarray(0, 4).toString()).toBe('%PDF');
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
   describe('close()', () => {
     it('resolves without error', async () => {
       const tmpHandle = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });

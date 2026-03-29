@@ -1,31 +1,15 @@
 // integration
 import { describe, it, expect, beforeAll } from 'vitest';
-import { tmpdir } from 'node:os';
-import { writeFile, mkdir } from 'node:fs/promises';
-import * as path from 'node:path';
 import { PDFDocument, PDFName, PDFString, PDFRawStream, PDFDict, PDFRef } from 'pdf-lib';
 import { deflateSync } from 'node:zlib';
 import { exportPdf } from '../exporter.js';
 import { getXfaDatasetsInfo } from '../analyzer.js';
 import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
+import { makePdfBytes, writeTempPdf } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-async function makePdfBytes(setup: (doc: PDFDocument) => void): Promise<Uint8Array> {
-  const doc = await PDFDocument.create();
-  setup(doc);
-  return doc.save();
-}
-
-async function writeTempPdf(name: string, bytes: Uint8Array): Promise<string> {
-  const dir = path.join(tmpdir(), 'fpdf-exporter-tests');
-  await mkdir(dir, { recursive: true });
-  const p = path.join(dir, name);
-  await writeFile(p, bytes);
-  return p;
-}
 
 function makeDoc(
   fields: Partial<PdfField>[],
@@ -68,170 +52,6 @@ function makeDoc(
     ],
   };
 }
-
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
-
-let textPdfPath: string;
-let checkboxPdfPath: string;
-let dropdownPdfPath: string;
-let radioPdfPath: string;
-
-beforeAll(async () => {
-  const textBytes = await makePdfBytes((doc) => {
-    const page = doc.addPage([612, 792]);
-    const form = doc.getForm();
-    const tf = form.createTextField('firstName');
-    tf.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
-  });
-  textPdfPath = await writeTempPdf('text.pdf', textBytes);
-
-  const checkboxBytes = await makePdfBytes((doc) => {
-    const page = doc.addPage([612, 792]);
-    const form = doc.getForm();
-    const cb = form.createCheckBox('agree');
-    cb.addToPage(page, { x: 50, y: 700, width: 20, height: 20 });
-  });
-  checkboxPdfPath = await writeTempPdf('checkbox.pdf', checkboxBytes);
-
-  const dropdownBytes = await makePdfBytes((doc) => {
-    const page = doc.addPage([612, 792]);
-    const form = doc.getForm();
-    const dd = form.createDropdown('color');
-    dd.setOptions(['red', 'green', 'blue']);
-    dd.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
-  });
-  dropdownPdfPath = await writeTempPdf('dropdown.pdf', dropdownBytes);
-
-  const radioBytes = await makePdfBytes((doc) => {
-    const page = doc.addPage([612, 792]);
-    const form = doc.getForm();
-    const rg = form.createRadioGroup('size');
-    rg.addOptionToPage('small', page, { x: 50, y: 700, width: 15, height: 15 });
-    rg.addOptionToPage('large', page, { x: 50, y: 680, width: 15, height: 15 });
-  });
-  radioPdfPath = await writeTempPdf('radio.pdf', radioBytes);
-});
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('exportPdf', () => {
-  it('writes a text field value into the returned PDF bytes', async () => {
-    const doc = makeDoc([{ name: 'firstName', type: 'text', value: 'Alice' }]);
-    doc.metadata.originalPdf = textPdfPath;
-
-    const bytes = await exportPdf(textPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getTextField('firstName').getText()).toBe('Alice');
-  });
-
-  it('checks a checkbox when value is true', async () => {
-    const doc = makeDoc([{ name: 'agree', type: 'checkbox', value: true }]);
-    doc.metadata.originalPdf = checkboxPdfPath;
-
-    const bytes = await exportPdf(checkboxPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getCheckBox('agree').isChecked()).toBe(true);
-  });
-
-  it('unchecks a checkbox when value is false', async () => {
-    const doc = makeDoc([{ name: 'agree', type: 'checkbox', value: false }]);
-    doc.metadata.originalPdf = checkboxPdfPath;
-
-    const bytes = await exportPdf(checkboxPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getCheckBox('agree').isChecked()).toBe(false);
-  });
-
-  it('selects a dropdown value', async () => {
-    const doc = makeDoc([
-      { name: 'color', type: 'select', value: 'green', options: ['red', 'green', 'blue'] },
-    ]);
-    doc.metadata.originalPdf = dropdownPdfPath;
-
-    const bytes = await exportPdf(dropdownPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getDropdown('color').getSelected()).toContain('green');
-  });
-
-  it('skips duplicate field names (processes each name only once)', async () => {
-    const doc = makeDoc([
-      { name: 'firstName', type: 'text', value: 'First' },
-      { name: 'firstName', type: 'text', value: 'Duplicate' },
-    ]);
-    doc.metadata.originalPdf = textPdfPath;
-
-    const bytes = await exportPdf(textPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    // 'First' should win; 'Duplicate' is skipped
-    expect(result.getForm().getTextField('firstName').getText()).toBe('First');
-  });
-
-  it('falls back to empty string when a boolean value is passed to a text field', async () => {
-    // Covers the `typeof value === 'string' ? value : ''` false branch in setText.
-    // pdf-lib returns undefined for an empty field, so we just verify it doesn't throw.
-    const doc = makeDoc([{ name: 'firstName', type: 'text', value: false as unknown as string }]);
-    await expect(exportPdf(textPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
-  });
-
-  it('silently skips field names not present in the PDF', async () => {
-    const doc = makeDoc([
-      { name: 'nonExistentField', type: 'text', value: 'ignored' },
-      { name: 'firstName', type: 'text', value: 'Alice' },
-    ]);
-    doc.metadata.originalPdf = textPdfPath;
-
-    await expect(exportPdf(textPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
-  });
-
-  it('selects a radio group option when value is a non-empty string', async () => {
-    const doc = makeDoc([{ name: 'size', type: 'radio', value: 'large' }]);
-    doc.metadata.originalPdf = radioPdfPath;
-
-    const bytes = await exportPdf(radioPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getRadioGroup('size').getSelected()).toBe('large');
-  });
-
-  it('skips a radio group field when value is boolean (no option identity)', async () => {
-    const doc = makeDoc([{ name: 'size', type: 'radio', value: true }]);
-    doc.metadata.originalPdf = radioPdfPath;
-
-    const bytes = await exportPdf(radioPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    // No option should be selected — boolean value carries no option name
-    expect(result.getForm().getRadioGroup('size').getSelected()).toBeUndefined();
-  });
-
-  it('returns a valid PDF (starts with %PDF header)', async () => {
-    const doc = makeDoc([{ name: 'firstName', type: 'text', value: 'Test' }]);
-    doc.metadata.originalPdf = textPdfPath;
-
-    const bytes = await exportPdf(textPdfPath, doc);
-    expect(Buffer.from(bytes.slice(0, 4)).toString()).toBe('%PDF');
-  });
-
-  it('uses stored pdfKind acroform path without XFA re-detection', async () => {
-    const doc = makeDoc([{ name: 'firstName', type: 'text', value: 'KindTest' }], 'acroform');
-    doc.metadata.originalPdf = textPdfPath;
-    const bytes = await exportPdf(textPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getTextField('firstName').getText()).toBe('KindTest');
-  });
-
-  it('falls back to runtime XFA detection when pdfKind is absent (old file)', async () => {
-    const doc = makeDoc([{ name: 'firstName', type: 'text', value: 'Legacy' }]);
-    doc.metadata.originalPdf = textPdfPath;
-    // Simulate an old .fpdf.json without pdfKind
-    delete (doc.metadata as unknown as Record<string, unknown>).pdfKind;
-    const bytes = await exportPdf(textPdfPath, doc);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getForm().getTextField('firstName').getText()).toBe('Legacy');
-  });
-});
 
 // ---------------------------------------------------------------------------
 // XFA datasets patching
@@ -277,7 +97,7 @@ describe('exportPdf — XFA datasets patching', () => {
 
   beforeAll(async () => {
     const bytes = await makeXfaPdfBytes();
-    xfaPdfPath = await writeTempPdf('xfa-datasets.pdf', bytes);
+    xfaPdfPath = await writeTempPdf('xfa-datasets.pdf', bytes, 'fpdf-exporter-tests');
   });
 
   it('patches firstName and lastName in the XFA datasets XML', async () => {
@@ -400,7 +220,11 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
 
   beforeAll(async () => {
     const bytes = await makeXfaHybridWithRadioPdfBytes();
-    xfaHybridRadioPdfPath = await writeTempPdf('xfa-hybrid-radio.pdf', bytes);
+    xfaHybridRadioPdfPath = await writeTempPdf(
+      'xfa-hybrid-radio.pdf',
+      bytes,
+      'fpdf-exporter-tests',
+    );
   });
 
   it('selects a radio option by matching the on-value index (isXfa=true path)', async () => {
@@ -419,7 +243,7 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
-    const plainPath = await writeTempPdf('plain-candidate.pdf', plainBytes);
+    const plainPath = await writeTempPdf('plain-candidate.pdf', plainBytes, 'fpdf-exporter-tests');
 
     const candidate: CandidateField = {
       id: 'c1',
@@ -469,7 +293,11 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
-    const plainPath = await writeTempPdf('plain-checkbox-candidate.pdf', plainBytes);
+    const plainPath = await writeTempPdf(
+      'plain-checkbox-candidate.pdf',
+      plainBytes,
+      'fpdf-exporter-tests',
+    );
 
     const candidate: CandidateField = {
       id: 'c2',
@@ -517,7 +345,7 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
-    const plainPath = await writeTempPdf('plain-dismissed.pdf', plainBytes);
+    const plainPath = await writeTempPdf('plain-dismissed.pdf', plainBytes, 'fpdf-exporter-tests');
 
     const candidate: CandidateField = {
       id: 'c3',
@@ -577,7 +405,11 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
-    const plainPath = await writeTempPdf('plain-radio-candidate.pdf', plainBytes);
+    const plainPath = await writeTempPdf(
+      'plain-radio-candidate.pdf',
+      plainBytes,
+      'fpdf-exporter-tests',
+    );
 
     const radioA: CandidateField = {
       id: 'r1',
@@ -641,7 +473,11 @@ describe('exportPdf — XFA hybrid AcroForm radio translation', () => {
     const plainBytes = await makePdfBytes((doc) => {
       doc.addPage([612, 792]);
     });
-    const plainPath = await writeTempPdf('plain-dedup-candidate.pdf', plainBytes);
+    const plainPath = await writeTempPdf(
+      'plain-dedup-candidate.pdf',
+      plainBytes,
+      'fpdf-exporter-tests',
+    );
 
     const makeCandidate = (id: string, y: number): CandidateField => ({
       id,

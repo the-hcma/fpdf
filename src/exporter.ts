@@ -1,17 +1,28 @@
 import { readFile } from 'node:fs/promises';
 import {
   PDFDocument,
+  PDFFont,
   PDFTextField,
   PDFCheckBox,
   PDFRadioGroup,
   PDFDropdown,
   PDFRef,
   PDFName,
+  PDFNumber,
   PDFDict,
+  PDFArray,
+  PDFString,
+  PDFHexString,
+  PDFAcroText,
+  PDFAcroCheckBox,
   StandardFonts,
   TextAlignment,
   rgb,
 } from 'pdf-lib';
+
+const MAX_FONT_SIZE = 12; // pt — hard cap for all text fields
+const MIN_FONT_SIZE = 4; // pt — lower bound; matches pdf-lib's internal minimum
+const FIELD_PADDING = 2; // pt — inner margin assumed on each side
 import type { CandidateField, FpdfDocument, PdfKind } from './types.js';
 import { getXfaDatasetsInfo, patchXfaDatasetsXml, writeXfaDatasetsStream } from './analyzer.js';
 
@@ -95,6 +106,15 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     }
   }
 
+  // Embed Helvetica once — used both for font-size measurement and for
+  // updateFieldAppearances().  Passing a font explicitly to
+  // updateFieldAppearances ensures appearances are always regenerated
+  // (pdf-lib silently skips fields whose original font it cannot load).
+  // Must happen before getForm() is called on the XFA path (getForm()
+  // strips /XFA from the in-memory AcroForm dict).
+  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const { fontSizes, noScrollDisable } = buildFontSizeMap(doc, allValues, helv);
+
   // Candidate fields: create real AcroForm widgets for non-XFA PDFs.
   // For XFA PDFs, fall back to stamped text — calling getForm() before the XFA
   // branch captures /XFA would strip it from the in-memory AcroForm dict.
@@ -118,12 +138,13 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     const xfaValue = acroForm instanceof PDFDict ? acroForm.get(PDFName.of('XFA')) : undefined;
 
     // Step 3: Fill AcroForm widget values (getForm() strips /XFA internally).
-    writeAcroFormValues(pdfDoc, allValues, allAlignments, 'xfa-hybrid');
+    writeAcroFormValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, 'xfa-hybrid');
 
     // Step 4: Generate widget appearances now that /XFA is already absent from
     // the in-memory dict — a second deleteXFA() call inside updateFieldAppearances
-    // is a no-op since /XFA is already gone.
-    pdfDoc.getForm().updateFieldAppearances();
+    // is a no-op since /XFA is already gone.  Pass helv explicitly so pdf-lib
+    // can always render (avoids silent skips for fields with custom fonts).
+    pdfDoc.getForm().updateFieldAppearances(helv);
 
     // Step 5: Restore /XFA so it is serialised into the output bytes.
     if (acroForm instanceof PDFDict && xfaValue !== undefined) {
@@ -135,10 +156,122 @@ export async function exportPdf(pdfPath: string, doc: FpdfDocument): Promise<Uin
     return pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false });
   } else {
     // ── Pure AcroForm PDF ─────────────────────────────────────────────────────
-    writeAcroFormValues(pdfDoc, allValues, allAlignments, 'acroform');
+    // Phase 1: fill fields registered in the AcroForm field tree.
+    writeAcroFormValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, 'acroform');
+    // Phase 2: fill orphan widget annotations (present in page /Annots but not
+    // in the AcroForm field tree — common in XFA-derived PDFs).  Each orphan
+    // widget's appearance is regenerated inside this function using helv.
+    writeOrphanWidgetValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, helv);
+    // Regenerate appearances for AcroForm-tree fields.
+    pdfDoc.getForm().updateFieldAppearances(helv);
   }
 
-  return pdfDoc.save();
+  // updateFieldAppearances: false — we already ran it explicitly above with
+  // helv so every field is guaranteed to have a rendered appearance stream.
+  return pdfDoc.save({ updateFieldAppearances: false });
+}
+
+/**
+ * Count the number of lines produced by word-wrapping `text` to `maxWidth` at
+ * `size` points.  Explicit `\n` characters are always treated as line breaks.
+ */
+function wrapTextLineCount(text: string, maxWidth: number, size: number, font: PDFFont): number {
+  let count = 0;
+  for (const para of text.split('\n')) {
+    if (para === '' || font.widthOfTextAtSize(para, size) <= maxWidth) {
+      count += 1;
+      continue;
+    }
+    let line = '';
+    for (const word of para.split(' ')) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
+        line = candidate;
+      } else {
+        if (line) count += 1;
+        line = word;
+      }
+    }
+    if (line) count += 1;
+  }
+  return Math.max(1, count);
+}
+
+/**
+ * Return the largest font size in [MIN_FONT_SIZE, MAX_FONT_SIZE] at which
+ * `value` fits inside a field of `fieldWidth × fieldHeight` points.
+ *
+ * For single-line fields the text must not exceed the available width.
+ * For multiline fields the word-wrapped line count must not exceed available height.
+ */
+function computeTextFontSize(
+  value: string,
+  fieldWidth: number,
+  fieldHeight: number,
+  multiline: boolean,
+  font: PDFFont,
+): number {
+  const availW = fieldWidth - FIELD_PADDING * 2;
+  const availH = fieldHeight - FIELD_PADDING * 2;
+
+  if (!multiline) {
+    // Round availH to 1 decimal to avoid float noise (e.g. 15.6 - 4 = 11.60000…2).
+    let size = Math.round(Math.min(MAX_FONT_SIZE, availH) * 10) / 10;
+    while (size > MIN_FONT_SIZE && font.widthOfTextAtSize(value, size) > availW) {
+      size -= 0.5;
+    }
+    return Math.max(MIN_FONT_SIZE, size);
+  }
+
+  for (let size = MAX_FONT_SIZE; size >= MIN_FONT_SIZE; size -= 0.5) {
+    const lineCount = wrapTextLineCount(value, availW, size, font);
+    if (lineCount * (size * 1.3) <= availH) return size;
+  }
+  return MIN_FONT_SIZE;
+}
+
+/**
+ * Build a map of field name → computed font size for every text/textarea field
+ * in `doc` that has a non-empty string value.  Uses Helvetica metrics as a
+ * representative approximation for standard AcroForm fields.
+ *
+ * Also returns a set of field names where the text still overflows even at the
+ * minimum font size — those fields should NOT have scrolling disabled, so that
+ * PDF viewers show the content as scrollable rather than hard-clipping it.
+ */
+function buildFontSizeMap(
+  doc: FpdfDocument,
+  allValues: Map<string, string | boolean>,
+  font: PDFFont,
+): { fontSizes: Map<string, number>; noScrollDisable: Set<string> } {
+  const fontSizes = new Map<string, number>();
+  const noScrollDisable = new Set<string>();
+
+  for (const page of doc.pages) {
+    for (const field of page.fields) {
+      if (field.type !== 'text' && field.type !== 'textarea') continue;
+      if (fontSizes.has(field.name)) continue; // first definition wins
+      const value = allValues.get(field.name);
+      if (typeof value !== 'string' || value === '') continue;
+      const size = computeTextFontSize(
+        value,
+        field.placement.width,
+        field.placement.height,
+        field.type === 'textarea',
+        font,
+      );
+      fontSizes.set(field.name, size);
+      // If the text still overflows at the computed (minimum) font size,
+      // leave scrolling enabled so viewers scroll rather than hard-clip.
+      if (
+        field.type !== 'textarea' &&
+        font.widthOfTextAtSize(value, size) > field.placement.width - FIELD_PADDING * 2
+      ) {
+        noScrollDisable.add(field.name);
+      }
+    }
+  }
+  return { fontSizes, noScrollDisable };
 }
 
 /**
@@ -310,6 +443,8 @@ function writeAcroFormValues(
   pdfDoc: PDFDocument,
   values: Map<string, string | boolean>,
   alignments: Map<string, string>,
+  fontSizes: Map<string, number>,
+  noScrollDisable: Set<string>,
   pdfKind: PdfKind,
 ): void {
   const form = pdfDoc.getForm();
@@ -321,6 +456,13 @@ function writeAcroFormValues(
         pdfField.setText(typeof value === 'string' ? value : '');
         const alignment = toTextAlignment(alignments.get(name));
         if (alignment !== undefined) pdfField.setAlignment(alignment);
+        const fontSize = fontSizes.get(name);
+        if (fontSize !== undefined) pdfField.setFontSize(fontSize);
+        // Disable scrolling so viewers don't render a scroll bar — but only
+        // when the text actually fits at the computed font size.  For fields
+        // where the text overflows even at the minimum size, leave scrolling
+        // enabled so viewers scroll/truncate rather than hard-clipping.
+        if (!noScrollDisable.has(name)) pdfField.disableScrolling();
       } else if (pdfField instanceof PDFCheckBox) {
         // Generate /AP /N appearance entries BEFORE check()/uncheck().
         // XFA checkbox widgets have no /AP /N entries (XFA renders its own
@@ -377,6 +519,114 @@ function writeAcroFormValues(
       }
     } catch {
       // Field name absent from PDF (e.g. after a schema migration) — skip.
+    }
+  }
+}
+
+/**
+ * Decode a /T (field name) value from a widget annotation dict.
+ * /T may be a PDFString, PDFHexString, or PDFName.
+ */
+function decodeFieldName(t: unknown): string | undefined {
+  if (t instanceof PDFString || t instanceof PDFHexString) return t.decodeText();
+  return undefined;
+}
+
+/**
+ * Write field values into orphan widget annotations — widget annotations that
+ * appear in a page's /Annots array but are NOT linked to the AcroForm field
+ * tree (no /Parent pointer).  This is common in XFA-derived PDFs and some
+ * third-party form builders where the form fields are stored directly as page
+ * annotations without being registered in /AcroForm/Fields.
+ *
+ * For each matching widget we create a lightweight pdf-lib field wrapper,
+ * set the value, apply font size, and regenerate the appearance stream so the
+ * text is visible in all viewers (not just ones that honour NeedAppearances).
+ */
+function writeOrphanWidgetValues(
+  pdfDoc: PDFDocument,
+  values: Map<string, string | boolean>,
+  alignments: Map<string, string>,
+  fontSizes: Map<string, number>,
+  noScrollDisable: Set<string>,
+  helv: PDFFont,
+): void {
+  for (let pageIdx = 0; pageIdx < pdfDoc.getPageCount(); pageIdx++) {
+    const page = pdfDoc.getPage(pageIdx);
+    const annotsRaw = page.node.get(PDFName.of('Annots'));
+    if (!annotsRaw) continue;
+    const annots = annotsRaw instanceof PDFRef ? pdfDoc.context.lookup(annotsRaw) : annotsRaw;
+    if (!(annots instanceof PDFArray)) continue;
+
+    for (let i = 0; i < annots.size(); i++) {
+      try {
+        const annotEntry = annots.get(i);
+        const annotRef = annotEntry instanceof PDFRef ? annotEntry : undefined;
+        if (!annotRef) continue;
+        const annotDict = pdfDoc.context.lookup(annotRef);
+        if (!(annotDict instanceof PDFDict)) continue;
+
+        // Only Widget annotations
+        const subtype = annotDict.get(PDFName.of('Subtype'));
+        if (!(subtype instanceof PDFName) || subtype.asString() !== '/Widget') continue;
+
+        // Orphan widgets have no /Parent — skip widgets already in the tree.
+        if (annotDict.get(PDFName.of('Parent'))) continue;
+
+        // Resolve field name from /T
+        const name = decodeFieldName(annotDict.get(PDFName.of('T')));
+        if (!name || !values.has(name)) continue;
+
+        const value = values.get(name);
+        if (value === undefined) continue;
+
+        // Resolve field type (FT may be inherited but for orphan root widgets
+        // it is almost always present directly).
+        const ftRaw = annotDict.get(PDFName.of('FT'));
+        if (!(ftRaw instanceof PDFName)) continue;
+        const ft = ftRaw.asString();
+
+        if (ft === '/Tx') {
+          // ── Text / textarea ─────────────────────────────────────────────
+          const acroText = PDFAcroText.fromDict(annotDict, annotRef);
+          const textField = PDFTextField.of(acroText, annotRef, pdfDoc);
+          textField.setText(typeof value === 'string' ? value : '');
+          const alignment = toTextAlignment(alignments.get(name));
+          if (alignment !== undefined) textField.setAlignment(alignment);
+          const fontSize = fontSizes.get(name);
+          if (fontSize !== undefined) {
+            try {
+              textField.setFontSize(fontSize);
+            } catch {
+              // Field has no /DA with Tf operator — skip font-size override.
+            }
+          }
+          if (!noScrollDisable.has(name)) {
+            try {
+              textField.disableScrolling();
+            } catch {
+              // Not all widgets support scrolling flags — safe to skip.
+            }
+          }
+          textField.updateAppearances(helv);
+        } else if (ft === '/Btn') {
+          // ── Checkbox ────────────────────────────────────────────────────
+          // Distinguish checkbox from radio/pushbutton via field flags.
+          const ffRaw = annotDict.get(PDFName.of('Ff'));
+          const ff = ffRaw instanceof PDFNumber ? ffRaw.asNumber() : 0;
+          const isRadio = (ff & 0x8000) !== 0;
+          const isPushButton = (ff & 0x10000) !== 0;
+          if (isRadio || isPushButton) continue;
+
+          const acroCheckBox = PDFAcroCheckBox.fromDict(annotDict, annotRef);
+          const checkBox = PDFCheckBox.of(acroCheckBox, annotRef, pdfDoc);
+          checkBox.updateAppearances();
+          if (value === true) checkBox.check();
+          else checkBox.uncheck();
+        }
+      } catch {
+        // Any error for an individual widget — skip silently.
+      }
     }
   }
 }

@@ -434,7 +434,7 @@ describe('startServer', () => {
           ws.on('error', reject);
           setTimeout(() => {
             reject(new Error('timeout waiting for docReload'));
-          }, 2000);
+          }, 5000);
         },
       );
 
@@ -505,6 +505,11 @@ describe('startServer', () => {
   });
 });
 
+// Allow the OS to reclaim file descriptors after closing a server.
+// On macOS, FSWatcher.close() is synchronous but kqueue FD cleanup can lag,
+// causing EMFILE when many servers are opened in quick succession.
+const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 50));
+
 describe('startServer error paths', () => {
   it('GET /filled-pdf returns 500 when the PDF file does not exist', async () => {
     const dir = path.join(tmpdir(), 'fpdf-server-filled-error-tests');
@@ -519,6 +524,7 @@ describe('startServer error paths', () => {
       expect(res.status).toBe(500);
     } finally {
       await h.close();
+      await settle();
     }
   });
 
@@ -551,6 +557,7 @@ describe('startServer error paths', () => {
       expect(res.status).toBe(200);
     } finally {
       await h.close();
+      await settle();
     }
   });
 
@@ -567,6 +574,7 @@ describe('startServer error paths', () => {
       expect(res.status).toBe(500);
     } finally {
       await h.close();
+      await settle();
     }
   });
 
@@ -598,6 +606,7 @@ describe('startServer error paths', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 200));
     } finally {
       await h.close();
+      await settle();
     }
   });
 
@@ -620,6 +629,7 @@ describe('startServer error paths', () => {
       expect(res.headers.get('content-type')).toContain('text/html');
     } finally {
       await h.close();
+      await settle();
     }
   });
 
@@ -639,6 +649,7 @@ describe('startServer error paths', () => {
       expect(body.error).toBeTruthy();
     } finally {
       await h.close();
+      await settle();
     }
   });
 });

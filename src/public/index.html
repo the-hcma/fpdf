@@ -20,7 +20,7 @@
         </button>
       </div>
       <div class="toolbar-group">
-        <button id="save" type="button" disabled>Save</button>
+        <button id="save" type="button" disabled title="Save field values to disk">Save</button>
       </div>
       <div class="toolbar-group">
         <button id="zoom-out" type="button" title="Zoom out (Ctrl+scroll)">−</button>
@@ -28,7 +28,9 @@
         <button id="zoom-in" type="button" title="Zoom in (Ctrl+scroll)">+</button>
       </div>
       <div class="toolbar-group">
-        <button id="toggle-fields" type="button">Show fields</button>
+        <button id="toggle-fields" type="button" title="Highlight fillable fields">
+          Show fields
+        </button>
         <button
           id="clear-fields"
           type="button"
@@ -62,12 +64,23 @@
     </div>
     <div id="error-banner" hidden>
       <span id="error-message"></span>
-      <button id="error-dismiss" type="button" aria-label="Dismiss error">✕</button>
+      <button id="error-dismiss" type="button" aria-label="Dismiss error" title="Dismiss error">
+        ✕
+      </button>
     </div>
     <div id="warn-banner" hidden>
       <span id="warn-message"></span>
-      <button id="regen-btn" type="button" hidden>Regenerate as standard PDF</button>
-      <button id="warn-dismiss" type="button" aria-label="Dismiss warning">✕</button>
+      <button
+        id="regen-btn"
+        type="button"
+        hidden
+        title="Re-export this PDF as a standard AcroForm PDF"
+      >
+        Regenerate as standard PDF
+      </button>
+      <button id="warn-dismiss" type="button" aria-label="Dismiss warning" title="Dismiss warning">
+        ✕
+      </button>
     </div>
     <div id="pages"></div>
     <script type="module" src="app.js"></script>

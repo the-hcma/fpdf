@@ -178,6 +178,19 @@ function measureTextWidth(text: string, sizePx: number, fontFamily: string): num
 }
 
 /**
+ * Map a pdf-lib StandardFonts name to the closest CSS font-family stack
+ * for preview rendering. Falls back to Helvetica/sans-serif for unknown names.
+ */
+function toCssFontFamily(fontName: string): string {
+  if (fontName.startsWith('Helvetica')) return 'Helvetica, Arial, sans-serif';
+  if (fontName.startsWith('Times')) return '"Times New Roman", Times, serif';
+  if (fontName.startsWith('Courier')) return '"Courier New", Courier, monospace';
+  if (fontName === 'Symbol') return 'Symbol, serif';
+  if (fontName === 'ZapfDingbats') return 'ZapfDingbats, serif';
+  return 'Helvetica, Arial, sans-serif';
+}
+
+/**
  * Shrink the font size of a text input or textarea until its content fits
  * within the available space, then restore as large as possible up to the
  * original max size stored in data-max-font-size.
@@ -947,6 +960,36 @@ function initEditInteractions(
         });
       }
 
+      // Font picker (text and textarea fields only)
+      if (anyField && inputEl && (anyField.type === 'text' || anyField.type === 'textarea')) {
+        const safeField = anyField;
+        const safeInputEl = inputEl;
+        items.push({
+          label: 'Font',
+          submenu: (
+            [
+              { label: 'Helvetica', value: 'Helvetica' },
+              { label: 'Helvetica Bold', value: 'HelveticaBold' },
+              { label: 'Times Roman', value: 'TimesRoman' },
+              { label: 'Times Bold', value: 'TimesRomanBold' },
+              { label: 'Courier', value: 'Courier' },
+              { label: 'Courier Bold', value: 'CourierBold' },
+            ] as { label: string; value: string }[]
+          ).map(({ label, value }) => ({
+            label,
+            action: () => {
+              if (value === 'Helvetica') {
+                delete safeField.fontName;
+              } else {
+                safeField.fontName = value;
+              }
+              safeInputEl.style.fontFamily = toCssFontFamily(value);
+              onDirty();
+            },
+          })),
+        });
+      }
+
       // Delete (candidate fields only)
       if (candidateField) {
         items.push({
@@ -1132,6 +1175,7 @@ function buildFieldElement(
   el.style.width = '100%';
   el.style.height = '100%';
   if (field.textAlign) el.style.textAlign = field.textAlign;
+  if (field.fontName) el.style.fontFamily = toCssFontFamily(field.fontName);
 
   // Wrap in a positioned div so the required marker can be absolutely placed
   // alongside the input (inputs don't support ::before/::after cross-browser).
@@ -1219,6 +1263,7 @@ function buildCandidateFieldElement(
   el.style.width = '100%';
   el.style.height = '100%';
   if (field.textAlign) el.style.textAlign = field.textAlign;
+  if (field.fontName) el.style.fontFamily = toCssFontFamily(field.fontName);
 
   const wrapper = document.createElement('div');
   wrapper.className = 'field-wrapper';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, PDFTextField, PDFCheckBox } from 'pdf-lib';
 import { exportFromImages, type RenderedPage } from '../exporter.js';
 import type { FpdfDocument, CandidateField } from '../types.js';
 import { MINIMAL_JPEG } from './helpers.js';
@@ -82,41 +82,77 @@ describe('exportFromImages', () => {
     expect(bytes.length).toBeGreaterThan(0);
   });
 
-  it('stamps text candidate field values onto the page', async () => {
-    const candidate = makeCandidate({ value: 'John Doe' });
+  it('creates an AcroForm text field for a text candidate with a value', async () => {
+    const candidate = makeCandidate({ value: 'John Doe', displayName: 'Full Name' });
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
     const bytes = await exportFromImages(pages, makeDoc([candidate]));
     const result = await PDFDocument.load(bytes);
-    expect(result.getPageCount()).toBe(1);
-    expect(bytes.length).toBeGreaterThan(MINIMAL_JPEG.length);
+    const form = result.getForm();
+    const fields = form.getFields();
+    expect(fields).toHaveLength(1);
+    const tf = fields[0];
+    expect(tf).toBeInstanceOf(PDFTextField);
+    expect((tf as PDFTextField).getText()).toBe('John Doe');
   });
 
-  it('stamps checkbox marks when value is true', async () => {
+  it('creates an AcroForm checkbox for a checked checkbox candidate', async () => {
     const candidate = makeCandidate({
       type: 'checkbox',
       value: true,
+      displayName: 'Agree',
       placement: { x: 50, y: 700, width: 14, height: 14 },
     });
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
     const bytes = await exportFromImages(pages, makeDoc([candidate]));
     const result = await PDFDocument.load(bytes);
-    expect(result.getPageCount()).toBe(1);
+    const form = result.getForm();
+    const fields = form.getFields();
+    expect(fields).toHaveLength(1);
+    const cb = fields[0];
+    expect(cb).toBeInstanceOf(PDFCheckBox);
+    expect((cb as PDFCheckBox).isChecked()).toBe(true);
+  });
+
+  it('creates an unchecked checkbox widget when value is false', async () => {
+    const candidate = makeCandidate({
+      type: 'checkbox',
+      value: false,
+      displayName: 'Opt In',
+      placement: { x: 50, y: 700, width: 14, height: 14 },
+    });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]));
+    const result = await PDFDocument.load(bytes);
+    const form = result.getForm();
+    const fields = form.getFields();
+    expect(fields).toHaveLength(1);
+    expect((fields[0] as PDFCheckBox).isChecked()).toBe(false);
   });
 
   it('skips dismissed candidate fields', async () => {
     const candidate = makeCandidate({ value: 'Secret', dismissed: true });
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
-    const withDismissed = await exportFromImages(pages, makeDoc([candidate]));
-
-    const noCandidates = await exportFromImages(pages, makeDoc([]));
-    expect(withDismissed.length).toBe(noCandidates.length);
+    const bytes = await exportFromImages(pages, makeDoc([candidate]));
+    const result = await PDFDocument.load(bytes);
+    const form = result.getForm();
+    expect(form.getFields()).toHaveLength(0);
   });
 
-  it('skips empty string values', async () => {
-    const candidate = makeCandidate({ value: '' });
+  it('creates a widget even for empty string values (field is present but blank)', async () => {
+    const candidate = makeCandidate({ value: '', displayName: 'Empty Field' });
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
-    const withEmpty = await exportFromImages(pages, makeDoc([candidate]));
-    const noCandidates = await exportFromImages(pages, makeDoc([]));
-    expect(withEmpty.length).toBe(noCandidates.length);
+    const bytes = await exportFromImages(pages, makeDoc([candidate]));
+    const result = await PDFDocument.load(bytes);
+    const form = result.getForm();
+    expect(form.getFields()).toHaveLength(1);
+  });
+
+  it('creates editable (non-read-only) fields', async () => {
+    const candidate = makeCandidate({ value: 'Editable', displayName: 'Name' });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]));
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getFields()[0] as PDFTextField;
+    expect(tf.isReadOnly()).toBe(false);
   });
 });

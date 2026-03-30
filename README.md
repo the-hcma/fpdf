@@ -85,6 +85,7 @@ fpdf classifies every PDF by its form structure on first open and shows a status
 | **Pure XFA** | XFA-only; no traditional AcroForm | ✅ | ✅ — use Regenerate for a universally compatible output |
 | **No AcroForm — vector/hybrid** | Digitally created PDF with draw-in fields (no AcroForm); fields detected from vector paths | ✅ | ✅ text stamped |
 | **No AcroForm — scanned** | Scanned image-only PDF; no auto-detected fields; add fields manually | ✅ manual | ✅ text stamped |
+| **Encrypted** | Password-protected or DRM-encrypted PDF; rendered via pdfjs-dist | ✅ | ✅ editable AcroForm (canvas fallback) |
 
 ### XFA regeneration
 
@@ -130,6 +131,10 @@ The toolbar offers two in-browser export actions:
 
 **Save AcroForm** is shown for all PDF types except pure AcroForm (which already has live editable fields). It is useful when you want to hand off a pre-filled but still-editable form to a recipient.
 
+### Encrypted PDF fallback
+
+Encrypted PDFs can be viewed and filled (pdfjs-dist handles decryption for rendering), but pdf-lib cannot modify them for standard export. When **Export PDF** detects an encrypted PDF, it automatically falls back to a canvas-based export: each rendered page is captured as a JPEG and a fresh PDF is assembled with the page images as backgrounds and real AcroForm widgets at the correct field positions. The result is an editable PDF — the recipient can still modify field values in any standard PDF viewer.
+
 ## UI features
 
 - **Dark mode** — default theme; toggle between light and dark via the toolbar button. Preference is persisted in `localStorage`.
@@ -146,6 +151,7 @@ The toolbar offers two in-browser export actions:
 For PDFs where fields are detected from vector paths rather than declared as AcroForm widgets, fpdf lets you adjust the detected layout before filling:
 
 - **Click a field** to select it (move/resize handles appear). Click the selected field again to switch to typing mode.
+- **Ctrl/Cmd+click** any field (including focused text fields) to select it for repositioning without losing context.
 - **Drag** a selected field to reposition it; edges of other fields snap horizontally.
 - **Resize** using the 8 corner/edge handles.
 - **Right-click** anywhere on the page for a context menu:

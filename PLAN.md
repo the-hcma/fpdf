@@ -351,6 +351,7 @@ fpdf fill form.pdf [--fresh] [--open] [--json path]
    ├─ Start Express server on port 0 (OS-allocated)
    ├─ Serve: PDF bytes (/pdf), JSON (/doc), read-only filled export (/filled-pdf), static UI assets
    ├─ POST /save-acroform → exportPdf() → saves <name>.fpdf.acroform.pdf (editable AcroForm)
+   ├─ POST /export-canvas → exportFromImages() → fallback for encrypted PDFs (JPEG pages + stamped values)
    ├─ POST /regenerate-acroform → regenerator.ts → saves <name>.fpdf-converted.acroform.pdf
    ├─ Print URL to stdout
    ├─ If --open flag: launch default browser automatically
@@ -409,3 +410,10 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | UI.3 | `03-28-feat_undo-clear-fields` | Undo clear fields: snapshot all field values before clearing; ✕ button flips to ↩ for a one-step undo; any subsequent manual field edit discards the snapshot and reverts the button | ✅ PR #135 |
 | UI.4 | `03-28-feat_button-tooltips` | Button tooltips: all toolbar and banner buttons have `title` attributes; `updateToggleLabel` syncs title with text so "Hide fields" state also has a tooltip | ✅ PR #136 |
 | UI.5 | `03-28-feat_fast-tooltips` | Fast custom toolbar tooltips: replaces 500ms OS-delay native title tooltip with a 150ms custom `#toolbar-tooltip` div; viewport-clamped (8 px margin), max-width 240 px with word-wrap; native `title` stashed/restored to prevent double tooltip | ✅ PR #137 |
+| docs | — | Update PLAN.md and README for PRs #129–137 | ✅ PR #138 |
+| test | `03-28-test_clear-fields-undo` | Integration test for clear-fields + undo cycle | ✅ PR #140 |
+| UI.6 | `03-28-feat_font-submenu-sorted` | Sort font picker submenu lexicographically | ✅ PR #141 |
+| CLI.3 | `03-28-feat_cli-save-acroform` | `fpdf save-acroform` CLI subcommand: export editable AcroForm PDF from the command line; prompts to pre-fill from `.fpdf.json` if one exists; warns and skips if the PDF already has AcroForm fields | ✅ PR #143 |
+| 13 | `encrypted-pdf-export` | Encrypted PDF support: graceful `pdf-lib` fallback in analyzer (nullable `pdfDoc`, falls back to `pdfjs-dist` for page data); `ExportError` class + canvas-based fallback export assembles new PDF from browser-rendered JPEG pages with real AcroForm widgets; `POST /export-canvas` server endpoint; UI export button auto-falls back for encrypted PDFs; suppress noisy `pdf-lib` parser warnings | ✅ PR #145 |
+| UI.7 | `ctrl-click-select-field` | Ctrl/Cmd+click selects any field type for repositioning, even text fields with focus | ✅ PR #146 |
+| test | `03-29-test_fix_pre-existing_flaky_tests` | Fix pre-existing flaky tests: Cigna XFA tests guard on PDF content (not just file existence); server docReload timeout increased to 5s; settle delays between error-path server teardowns | ✅ PR #147 |

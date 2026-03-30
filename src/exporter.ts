@@ -840,71 +840,38 @@ export interface RenderedPage {
 }
 
 /**
- * Create a new PDF from pre-rendered page images and stamp candidate field
- * values on top.  Used as a fallback when pdf-lib cannot load the original
- * PDF (e.g. encrypted).  The browser captures each page canvas as JPEG and
- * sends it here; this function assembles them into a proper PDF with text
- * values drawn at the correct positions.
+ * Create a new PDF from pre-rendered page images with real AcroForm widgets
+ * for all candidate fields.  Used as a fallback when pdf-lib cannot load the
+ * original PDF (e.g. encrypted).  The browser captures each page canvas as
+ * JPEG and sends it here; this function assembles them into a proper PDF with
+ * editable AcroForm fields positioned at the correct coordinates on top of
+ * the page images.
  */
 export async function exportFromImages(
   pages: RenderedPage[],
   doc: FpdfDocument,
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create();
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const COLOR = rgb(0, 0, 0);
 
-  for (let i = 0; i < pages.length; i++) {
-    const rp = pages[i];
-    if (!rp) continue;
+  for (const rp of pages) {
     const { jpeg, widthPt, heightPt } = rp;
     const img = await pdfDoc.embedJpg(jpeg);
     const page = pdfDoc.addPage([widthPt, heightPt]);
     page.drawImage(img, { x: 0, y: 0, width: widthPt, height: heightPt });
+  }
 
-    const docPage = doc.pages[i];
-    if (!docPage) continue;
-
-    for (const c of docPage.candidateFields) {
-      if (c.dismissed) continue;
-      const { x, y, width, height } = c.placement;
-
-      if (c.type === 'checkbox' && c.value === true) {
-        const mark = 'X';
-        const markSize = Math.max(6, Math.round(height * 0.8));
-        page.drawText(mark, {
-          x: x + (width - font.widthOfTextAtSize(mark, markSize)) / 2,
-          y: y + (height - markSize) / 2,
-          size: markSize,
-          font,
-          color: COLOR,
-        });
-      } else if (typeof c.value === 'string' && c.value.trim() !== '') {
-        const value = c.value;
-        let size = Math.max(6, Math.round(height * 0.7));
-        while (size > 6 && font.widthOfTextAtSize(value, size) > width - FIELD_PADDING * 2) {
-          size -= 0.5;
-        }
-        const textWidth = font.widthOfTextAtSize(value, size);
-        let textX: number;
-        if (c.textAlign === 'center') {
-          textX = x + (width - textWidth) / 2;
-        } else if (c.textAlign === 'right') {
-          textX = x + width - textWidth - FIELD_PADDING;
-        } else {
-          textX = x + FIELD_PADDING;
-        }
-        page.drawText(value, {
-          x: textX,
-          y: y + FIELD_PADDING,
-          size,
-          font,
-          color: COLOR,
-          maxWidth: width - FIELD_PADDING * 2,
-        });
+  const fontCache = new Map<string, PDFFont>();
+  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  fontCache.set('Helvetica', helv);
+  for (const docPage of doc.pages) {
+    for (const field of docPage.candidateFields) {
+      if (field.fontName !== undefined && !fontCache.has(field.fontName)) {
+        await resolveFont(pdfDoc, field.fontName, fontCache);
       }
     }
   }
+
+  createCandidateWidgets(pdfDoc, doc, fontCache, false);
 
   return pdfDoc.save();
 }

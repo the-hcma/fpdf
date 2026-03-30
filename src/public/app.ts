@@ -1852,6 +1852,12 @@ async function main(): Promise<void> {
       saveAcroFormBtn.addEventListener('click', () => {
         saveAcroFormBtn.disabled = true;
         saveAcroFormBtn.textContent = 'Saving\u2026';
+
+        const resetBtn = (): void => {
+          saveAcroFormBtn.disabled = false;
+          saveAcroFormBtn.textContent = 'Save AcroForm';
+        };
+
         fetch('/save-acroform', { method: 'POST' })
           .then(async (r) => {
             if (!r.ok) {
@@ -1861,15 +1867,31 @@ async function main(): Promise<void> {
             const body = (await r.json()) as { path?: string };
             saveAcroFormBtn.textContent = 'Saved!';
             setStatus(`AcroForm PDF saved \u2192 ${body.path ?? ''}`);
-            setTimeout(() => {
-              saveAcroFormBtn.disabled = false;
-              saveAcroFormBtn.textContent = 'Save AcroForm';
-            }, 3000);
+            setTimeout(resetBtn, 3000);
           })
-          .catch((err: unknown) => {
-            showError(err instanceof Error ? err.message : String(err));
-            saveAcroFormBtn.disabled = false;
-            saveAcroFormBtn.textContent = 'Save AcroForm';
+          .catch((primaryErr: unknown) => {
+            const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+            if (!errMsg.includes('encrypted')) {
+              showError(errMsg);
+              resetBtn();
+              return;
+            }
+            exportViaCanvas(fpdfDoc, pagesContainer)
+              .then((blob) => {
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${fpdfDoc.metadata.pdfFilename.replace(/\.[^.]+$/, '')}.fpdf.acroform.pdf`;
+                a.click();
+                URL.revokeObjectURL(url);
+                saveAcroFormBtn.textContent = 'Saved!';
+                setStatus('AcroForm PDF saved (canvas fallback) \u2192 Downloads folder');
+                setTimeout(resetBtn, 3000);
+              })
+              .catch((canvasErr: unknown) => {
+                resetBtn();
+                showError(canvasErr instanceof Error ? canvasErr.message : String(canvasErr));
+              });
           });
       });
     }

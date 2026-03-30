@@ -111,7 +111,13 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     };
     run().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
-      logger.error(`save-acroform failed: ${msg}`);
+      if (err instanceof ExportError) {
+        logger.debug(
+          `save-acroform: primary export unavailable, client will use canvas fallback: ${msg}`,
+        );
+      } else {
+        logger.error(`save-acroform failed: ${msg}`);
+      }
       res.status(500).json({ error: msg });
     });
   });

@@ -210,13 +210,18 @@ mkdir -p "${app_path}/Contents/MacOS"
 mkdir -p "${app_path}/Contents/Resources"
 
 # Launcher: run fpdf directly in the background — no Terminal window lingers.
-# Use a login shell (-l) so the user's PATH (nvm, homebrew, etc.) is available.
-# The server shuts itself down when the browser tab is closed.
-cat > "${app_path}/Contents/MacOS/fpdf" <<LAUNCHER
-#!/bin/bash -l
-cd '${repo_dir}' && exec ./scripts/fpdf --open
+# Use the user's actual login shell via dscl so their PATH (nvm, homebrew,
+# etc.) is loaded correctly. macOS defaults to zsh since Catalina, but we
+# read the real shell rather than hardcoding. Errors go to ~/Library/Logs/fpdf.log.
+launcher="${app_path}/Contents/MacOS/fpdf"
+cat > "$launcher" <<LAUNCHER
+#!/bin/bash
+user_shell="\$(dscl . -read "/Users/\$USER" UserShell 2>/dev/null | awk '{print \$2}')"
+: "\${user_shell:=/bin/zsh}"
+export FPDF_REPO='${repo_dir}'
+exec "\$user_shell" -l -c 'cd "\$FPDF_REPO" && exec ./scripts/fpdf --open' 2>>"\$HOME/Library/Logs/fpdf.log"
 LAUNCHER
-chmod +x "${app_path}/Contents/MacOS/fpdf"
+chmod +x "$launcher"
 
 # Info.plist — CFBundleIconFile must match the .icns filename without extension
 cat > "${app_path}/Contents/Info.plist" <<PLIST

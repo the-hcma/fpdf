@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# install-macos-app — create fpdf.app and install it to ~/Applications
+# install-macos-app — create fpdf.app and install it to ~/Applications  (macOS only)
+#
+# Requires: macOS with Xcode Command Line Tools (xcode-select --install)
 #
 # Usage:
 #   ./scripts/install-macos-app

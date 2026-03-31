@@ -48,6 +48,7 @@ The app bakes in the path to your local clone at install time. Re-run the script
 ## Requirements
 
 - Node.js ≥ 20 LTS
+- macOS (for the optional Finder app — requires Xcode Command Line Tools: `xcode-select --install`)
 
 ## Installation
 

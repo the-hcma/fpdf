@@ -1,27 +1,32 @@
 name: CI
 
 on:
+  # Omitting push: main — the merge queue already validates the integrated
+  # state before landing; a second run after merge duplicates work without
+  # adding signal.
   pull_request:
     types: [opened, reopened, synchronize]
     branches-ignore:
       - '**/graphite-base/**'
-  push:
-    branches: [main]
+  schedule:
+    # Weekly full suite — catches new CVEs and regressions between PRs.
+    - cron: '0 7 * * 4'
+  workflow_dispatch:
 
 jobs:
   shellcheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Lint shell scripts
         run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: 'npm'
@@ -34,3 +39,32 @@ jobs:
 
       - name: Test
         run: npm test
+
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    - name: Install gitleaks
+      run: |
+        ARCH=$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')
+        FALLBACK_VERSION=8.30.0
+        VERSION=$(curl -sf https://api.github.com/repos/gitleaks/gitleaks/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | tr -d 'v')
+        VERSION=${VERSION:-$FALLBACK_VERSION}
+        curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_${ARCH}.tar.gz" \
+          | tar -xz gitleaks
+        sudo mv gitleaks /usr/local/bin/
+
+    - name: Scan for leaked secrets
+      run: |
+        BASE="${{ github.event.pull_request.base.sha }}"
+        HEAD="${{ github.event.pull_request.head.sha }}"
+        if [ -n "$BASE" ] && [ -n "$HEAD" ]; then
+          gitleaks detect --source . --log-opts "${BASE}..${HEAD}"
+        else
+          gitleaks detect --source .
+        fi

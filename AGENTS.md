@@ -85,6 +85,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - Keep each branch in the stack focused on exactly one logical change. Stacks should map 1-to-1 with milestones or sub-tasks from [PLAN.md](./PLAN.md).
 - Sync regularly: `gt sync` before starting new work; `gt restack` after upstream changes land.
 - Submit stacks with `gt submit` — do not open PRs manually via the GitHub UI.
+- To merge a PR, add the `merge-it` label: `gh pr edit <number> --add-label merge-it`. Never use `gh pr merge` directly.
 - Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
 - Each commit must pass `npm run check` (type-check + lint + format check) and `npm test`.
 - Keep commits focused. One logical change per commit.

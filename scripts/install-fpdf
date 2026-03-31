@@ -131,18 +131,18 @@ let bounds     = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
 ctx.textMatrix = .identity
 ctx.textPosition = CGPoint(
     x: (s - bounds.width)  / 2 - bounds.origin.x,
-    y: s / 2 - bounds.height / 2 - bounds.origin.y + 100
+    y: s / 2 - bounds.height / 2 - bounds.origin.y + 170
 )
 CTLineDraw(line, ctx)
 
 // "pdf" — small, muted, bottom
-let smallFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 180, nil)
+let smallFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 310, nil)
 let pdfStr    = NSAttributedString(string: "pdf", attributes: [
     .font: smallFont as Any, .foregroundColor: mutedCrimson
 ])
 let pdfLine   = CTLineCreateWithAttributedString(pdfStr)
 let pdfBounds = CTLineGetBoundsWithOptions(pdfLine, .useGlyphPathBounds)
-ctx.textPosition = CGPoint(x: (s - pdfBounds.width) / 2, y: 120)
+ctx.textPosition = CGPoint(x: (s - pdfBounds.width) / 2, y: 180)
 CTLineDraw(pdfLine, ctx)
 
 guard let cgImage = ctx.makeImage() else { fputs("makeImage failed\n", stderr); exit(1) }

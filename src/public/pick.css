@@ -1,0 +1,126 @@
+#picker-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: var(--bg-toolbar);
+  border-bottom: 1px solid var(--border-toolbar);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+#picker-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--color-button);
+}
+
+#breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 12px;
+  font-size: 0.82rem;
+  color: var(--color-status);
+  border-bottom: 1px solid var(--border-toolbar);
+}
+
+#breadcrumb button {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: var(--color-button);
+  font-size: 0.82rem;
+}
+
+#breadcrumb button:hover {
+  background: var(--bg-button-hover);
+}
+
+.breadcrumb-sep {
+  color: var(--color-status);
+  user-select: none;
+}
+
+#picker-status {
+  padding: 4px 12px;
+  font-size: 0.82rem;
+  color: var(--color-status);
+  min-height: 1.4em;
+}
+
+#picker-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg-error);
+  border-bottom: 1px solid var(--border-toolbar);
+  color: var(--color-error);
+  font-size: 0.88rem;
+}
+
+#picker-error[hidden] {
+  display: none;
+}
+
+#picker-error-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-error);
+  font-size: 1rem;
+  padding: 0 4px;
+}
+
+#entry-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px;
+}
+
+#entry-list li {
+  margin: 1px 0;
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-button);
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.92rem;
+}
+
+.entry:hover:not(:disabled) {
+  background: var(--bg-button-hover);
+}
+
+.entry:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.entry::before {
+  font-style: normal;
+  flex-shrink: 0;
+}
+
+.entry--dir::before {
+  content: '📁';
+}
+
+.entry--pdf::before {
+  content: '📄';
+}

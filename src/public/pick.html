@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>fpdf — Open a PDF</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="pick.css" />
+  </head>
+  <body data-theme="dark">
+    <div id="picker-toolbar">
+      <span id="picker-title">fpdf</span>
+      <button id="dark-toggle" type="button" title="Toggle light/dark mode">☀</button>
+    </div>
+    <div id="picker-error" hidden>
+      <span id="picker-error-message"></span>
+      <button id="picker-error-dismiss" type="button">✕</button>
+    </div>
+    <nav id="breadcrumb" aria-label="Current folder"></nav>
+    <div id="picker-status"></div>
+    <ul id="entry-list" role="listbox" aria-label="Files and folders"></ul>
+    <script type="module" src="pick.js"></script>
+  </body>
+</html>

@@ -3,14 +3,14 @@
  * These tests start a real HTTP server on a random port and make real requests.
  */
 // integration
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { tmpdir } from 'node:os';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { tmpdir, homedir } from 'node:os';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { WebSocket } from 'ws';
 import { PDFDocument } from 'pdf-lib';
 import { startServer, type ServerHandle } from '../server.js';
-import type { FpdfDocument } from '../types.js';
+import type { BrowseResponse, FpdfDocument } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -651,5 +651,258 @@ describe('startServer error paths', () => {
       await h.close();
       await settle();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Picker mode
+// ---------------------------------------------------------------------------
+
+describe('picker mode (no doc on start)', () => {
+  let pickerHandle: ServerHandle;
+
+  beforeAll(async () => {
+    pickerHandle = await startServer({});
+  });
+
+  afterAll(async () => {
+    await pickerHandle.close();
+    await settle();
+  });
+
+  it('starts successfully and returns a 127.0.0.1 URL', () => {
+    expect(pickerHandle.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+  });
+
+  it('GET /pdf returns 503 when no doc is loaded', async () => {
+    const res = await fetch(`${pickerHandle.url}/pdf`);
+    expect(res.status).toBe(503);
+  });
+
+  it('GET /doc returns 503 when no doc is loaded', async () => {
+    const res = await fetch(`${pickerHandle.url}/doc`);
+    expect(res.status).toBe(503);
+  });
+
+  it('GET /filled-pdf returns 503 when no doc is loaded', async () => {
+    const res = await fetch(`${pickerHandle.url}/filled-pdf`);
+    expect(res.status).toBe(503);
+  });
+
+  it('GET / returns HTML (pick.html or fallback) when in picker mode', async () => {
+    const res = await fetch(pickerHandle.url);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /browse
+// ---------------------------------------------------------------------------
+
+describe('GET /browse', () => {
+  let h: ServerHandle;
+
+  beforeAll(async () => {
+    h = await startServer({});
+  });
+
+  afterAll(async () => {
+    await h.close();
+    await settle();
+  });
+
+  it('returns 200 with resolvedPath and entries for a valid directory', async () => {
+    const res = await fetch(`${h.url}/browse?path=${encodeURIComponent(homedir())}`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as BrowseResponse;
+    expect(body.resolvedPath).toBe(homedir());
+    expect(Array.isArray(body.entries)).toBe(true);
+  });
+
+  it('defaults to home dir when ?path is omitted', async () => {
+    const res = await fetch(`${h.url}/browse`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as BrowseResponse;
+    expect(body.resolvedPath).toBe(homedir());
+  });
+
+  it('returns 500 for a non-existent path', async () => {
+    const res = await fetch(`${h.url}/browse?path=${encodeURIComponent('/does/not/exist/xyz')}`);
+    expect(res.status).toBe(500);
+  });
+
+  it('does not include dotfiles in results', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-browse-test');
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, '.hidden.pdf'), '%PDF-1.4');
+    await writeFile(path.join(dir, 'visible.pdf'), '%PDF-1.4');
+    const res = await fetch(`${h.url}/browse?path=${encodeURIComponent(dir)}`);
+    const body = (await res.json()) as BrowseResponse;
+    const names = body.entries.map((e) => e.name);
+    expect(names).not.toContain('.hidden.pdf');
+    expect(names).toContain('visible.pdf');
+  });
+
+  it('returns dirs before files and excludes non-PDF files', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-browse-sort-test');
+    await mkdir(path.join(dir, 'subdir'), { recursive: true });
+    await writeFile(path.join(dir, 'a.pdf'), '%PDF-1.4');
+    await writeFile(path.join(dir, 'b.txt'), 'text');
+    const res = await fetch(`${h.url}/browse?path=${encodeURIComponent(dir)}`);
+    const body = (await res.json()) as BrowseResponse;
+    expect(body.entries[0]?.kind).toBe('dir');
+    expect(body.entries.every((e) => e.kind === 'dir' || e.name.endsWith('.pdf'))).toBe(true);
+    expect(body.entries.find((e) => e.name === 'b.txt')).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /open
+// ---------------------------------------------------------------------------
+
+describe('POST /open', () => {
+  let h: ServerHandle;
+  let testPdfPath: string;
+
+  beforeAll(async () => {
+    h = await startServer({});
+
+    const dir = path.join(tmpdir(), 'fpdf-open-test');
+    await mkdir(dir, { recursive: true });
+    testPdfPath = path.join(dir, 'open-test.pdf');
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([612, 792]);
+    await writeFile(testPdfPath, await pdfDoc.save());
+  });
+
+  afterAll(async () => {
+    await h.close();
+    await settle();
+  });
+
+  it('returns 400 when filePath is missing', async () => {
+    const res = await fetch(`${h.url}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when filePath is not a .pdf', async () => {
+    const res = await fetch(`${h.url}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: '/some/file.txt' }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 200 and transitions to fill mode after opening a valid PDF', async () => {
+    const res = await fetch(`${h.url}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: testPdfPath }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    // After open, /doc should return an FpdfDocument (no longer 503)
+    const docRes = await fetch(`${h.url}/doc`);
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as FpdfDocument;
+    expect(doc.metadata.originalPdf).toBe(testPdfPath);
+  });
+
+  it('creates a .fpdf.json file next to the PDF after open', async () => {
+    const stem = path.basename(testPdfPath, path.extname(testPdfPath));
+    const expectedJson = path.join(path.dirname(testPdfPath), `${stem}.fpdf.json`);
+    const raw = await readFile(expectedJson, 'utf-8');
+    const doc = JSON.parse(raw) as FpdfDocument;
+    expect(doc.metadata.pdfFilename).toBe(path.basename(testPdfPath));
+  });
+
+  it('broadcasts pdfOpened to connected WebSocket clients', async () => {
+    // Open a fresh picker server so we are back in picker mode
+    const h2 = await startServer({});
+
+    const dir2 = path.join(tmpdir(), 'fpdf-open-ws-test');
+    await mkdir(dir2, { recursive: true });
+    const pdf2 = path.join(dir2, 'ws-test.pdf');
+    const pdfDoc2 = await PDFDocument.create();
+    pdfDoc2.addPage([612, 792]);
+    await writeFile(pdf2, await pdfDoc2.save());
+
+    const wsUrl = h2.url.replace('http://', 'ws://') + '/ws';
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve) => ws.once('open', resolve));
+
+    const opened = new Promise<Record<string, unknown>>((resolve) => {
+      ws.on('message', (data: Buffer | string) => {
+        const raw = Buffer.isBuffer(data) ? data.toString('utf-8') : data;
+        const msg = JSON.parse(raw) as Record<string, unknown>;
+        if (msg.type === 'pdfOpened') resolve(msg);
+      });
+    });
+
+    await fetch(`${h2.url}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: pdf2 }),
+    });
+
+    const msg = await opened;
+    expect(msg.type).toBe('pdfOpened');
+    expect(typeof msg.doc).toBe('object');
+
+    ws.close();
+    await h2.close();
+    await settle();
+  });
+
+  it('returns 409 when analysis is already in progress', async () => {
+    // Mock analyzePdf to hang so we can hit the in-progress guard
+    const analyzerModule = await import('../analyzer.js');
+    let resolve!: () => void;
+    const hanging = new Promise<never>((_, reject) => {
+      resolve = () => {
+        reject(new Error('cancelled'));
+      };
+    });
+    const spy = vi.spyOn(analyzerModule, 'analyzePdf').mockReturnValueOnce(hanging);
+
+    const h3 = await startServer({});
+    const dir3 = path.join(tmpdir(), 'fpdf-open-409-test');
+    await mkdir(dir3, { recursive: true });
+    const pdf3 = path.join(dir3, 'inprogress.pdf');
+    const pdfDoc3 = await PDFDocument.create();
+    pdfDoc3.addPage([612, 792]);
+    await writeFile(pdf3, await pdfDoc3.save());
+
+    // First request starts analysis (hangs)
+    const first = fetch(`${h3.url}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: pdf3 }),
+    });
+
+    // Give the server a tick to set analyzeInProgress = true
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Second request should get 409
+    const second = await fetch(`${h3.url}/open`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: pdf3 }),
+    });
+    expect(second.status).toBe(409);
+
+    resolve();
+    await first.catch(() => undefined);
+    spy.mockRestore();
+    await h3.close();
+    await settle();
   });
 });

@@ -157,8 +157,12 @@ do {
     fputs("Write failed: \(error)\n", stderr); exit(1)
 }'
 
-# ── Content hash (AppleScript + icon source) ─────────────────────────────────
-current_hash="$(printf '%s\n%s' "$applescript_content" "$icon_gen_src" | shasum -a 256 | cut -d' ' -f1)"
+# ── Content hash (AppleScript + icon source + launcher version) ──────────────
+# Bump launcher_version whenever the launcher heredoc logic changes so that
+# already-installed apps are automatically updated on the next install run.
+launcher_version="2"
+readonly launcher_version
+current_hash="$(printf '%s\n%s\n%s' "$applescript_content" "$icon_gen_src" "$launcher_version" | shasum -a 256 | cut -d' ' -f1)"
 readonly current_hash
 
 # Skip reinstall if the installed app is already identical.
@@ -216,10 +220,43 @@ mkdir -p "${app_path}/Contents/Resources"
 launcher="${app_path}/Contents/MacOS/fpdf"
 cat > "$launcher" <<LAUNCHER
 #!/bin/bash
-user_shell="\$(dscl . -read "/Users/\$USER" UserShell 2>/dev/null | awk '{print \$2}')"
-: "\${user_shell:=/bin/zsh}"
 export FPDF_REPO='${repo_dir}'
-exec "\$user_shell" -l -c 'cd "\$FPDF_REPO" && exec ./scripts/fpdf --open' 2>>"\$HOME/Library/Logs/fpdf.log"
+
+# Pre-flight: check that node and node_modules are available before launching
+# headlessly.  Interactive prompts in scripts/fpdf hang silently with no TTY,
+# so we detect missing dependencies here and redirect to a Terminal window for
+# first-time setup instead.  On subsequent launches the check passes and the
+# app runs silently in the background as intended.
+_fpdf_check_env() {
+  # Load fnm if available (mirrors scripts/fpdf _reload_fnm)
+  if [[ ":\$PATH:" != *":\$HOME/.local/share/fnm:"* && ":\$PATH:" != *":\$HOME/.fnm:"* ]]; then
+    export PATH="\$HOME/.local/share/fnm:\$HOME/.fnm:\$PATH"
+  fi
+  if command -v fnm &>/dev/null; then
+    eval "\$(fnm env --shell bash 2>/dev/null)" || true
+  fi
+  # Prefer brew-installed node on macOS (mirrors scripts/fpdf _reload_brew_node)
+  if command -v brew &>/dev/null; then
+    local brew_node_bin
+    brew_node_bin="\$(brew --prefix node 2>/dev/null)/bin"
+    if [[ -x "\${brew_node_bin}/node" && ":\$PATH:" != *":\${brew_node_bin}:"* ]]; then
+      export PATH="\${brew_node_bin}:\$PATH"
+    fi
+  fi
+  command -v node &>/dev/null || return 1
+  [[ -d "\${FPDF_REPO}/node_modules" ]] || return 1
+}
+
+if _fpdf_check_env; then
+  user_shell="\$(dscl . -read "/Users/\$USER" UserShell 2>/dev/null | awk '{print \$2}')"
+  : "\${user_shell:=/bin/zsh}"
+  exec "\$user_shell" -l -c 'cd "\$FPDF_REPO" && exec ./scripts/fpdf --open' 2>>"\$HOME/Library/Logs/fpdf.log"
+else
+  # Open a Terminal window so the user can complete first-time setup
+  # interactively (install Node.js, run npm install).  scripts/fpdf will
+  # handle all prompts and then start the server automatically.
+  osascript -e "tell application \"Terminal\" to do script \"cd '\${FPDF_REPO}' && ./scripts/fpdf --open\""
+fi
 LAUNCHER
 chmod +x "$launcher"
 

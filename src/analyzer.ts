@@ -249,8 +249,32 @@ async function extractTextBlocks(
     if (!placed) groups.push([item]);
   }
 
-  return groups.map((group) => {
+  // Split each coarse group at wide horizontal gaps to avoid merging labels from
+  // different columns.  Items on the same baseline with a gap > 4× font height
+  // almost certainly belong to separate cells (e.g. "STATE" at x=27 and "ZIP"
+  // at x=162 on the same line with a 109pt gap should become two blocks, not one).
+  const MAX_INTRA_GROUP_GAP_FACTOR = 4;
+  const splitGroups: (typeof items)[] = [];
+  for (const group of groups) {
     group.sort((a, b) => a.x - b.x);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const rep = group[0]!;
+    const maxGap = rep.height * MAX_INTRA_GROUP_GAP_FACTOR;
+    let current: typeof items = [rep];
+    for (const item of group.slice(1)) {
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      const prev = current[current.length - 1]!; // safe: current starts as [rep] and only grows
+      if (item.x - (prev.x + prev.width) > maxGap) {
+        splitGroups.push(current);
+        current = [item];
+      } else {
+        current.push(item);
+      }
+    }
+    splitGroups.push(current);
+  }
+
+  return splitGroups.map((group) => {
     // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
     const rep = group[0]!; // groups only contain non-empty arrays
 
@@ -631,6 +655,9 @@ const NOISE_WIDTH_RATIO = 0.85; // fraction of page width → structural rule
 const MIN_VISIBLE_HEIGHT = 4; // pt — below this the path is a line, not a visible rectangle
 const MAX_DIVIDER_HEIGHT = 20; // pt — thin stroked shapes in this range act as section dividers
 const COVERAGE_FILTER_THRESHOLD = 0.55; // > 55% text area coverage → instruction/content block, not a field
+/** Fill-area coverage threshold: if text covers ≥ this fraction of the computed fill rectangle, discard
+ *  the candidate. Catches thin cells in header/label rows where a text block partially clips in. */
+const FILL_COVERAGE_THRESHOLD = 0.3;
 /** Width ratio: an H-line used as a "container" boundary must be this much wider than the column line. */
 const CONTAINMENT_WIDTH_RATIO = 1.3;
 /**
@@ -936,9 +963,18 @@ function evaluateBox(
     }
   }
 
+  // Exclude visual-placeholder blocks (underscores / dashes / slashes / spaces) that
+  // PDF forms render as blank fill-in lines (e.g. "_____ / _____ / _____ ________").
+  // When gap-splitting narrows such a block, it can push its area-overlap fraction
+  // just above the 50% insideBlocks threshold, incorrectly triggering the
+  // labelSource='inside' fill-area calculation instead of the defaultInset path.
+  // These blocks carry no label information, so removing them before label derivation
+  // is safe; they are still counted in the cell-level coverage check above.
+  const labelInsideBlocks = insideBlocks.filter((b) => b.text.replace(/[_\-/\s]/g, '').length > 0);
+
   // Filter out inside blocks that are clearly section headers: font size larger
   // than the cell height means it's a title/header bar, not a field label.
-  const labelBlocks = insideBlocks.filter((b) => b.fontSize <= h * 1.1);
+  const labelBlocks = labelInsideBlocks.filter((b) => b.fontSize <= h * 1.1);
 
   const insideLabel = labelBlocks[0] ?? null;
   const externalLabel =
@@ -1009,20 +1045,23 @@ function evaluateBox(
   // input element does not overlap the drawn border lines.  For in-box-label
   // fields, additionally crop the top edge down to just below the label text
   // so the user fills in the blank area rather than typing over the label.
-  const fieldX = x + FIELD_MARGIN;
-  let fieldY = y + FIELD_MARGIN;
-  const fieldW = w - 2 * FIELD_MARGIN;
-  let fieldH = h - 2 * FIELD_MARGIN;
+  // Checkboxes are small; 3pt on each side would consume most of the box, so
+  // use a 1pt margin instead to keep the clickable area close to the drawn shape.
+  const margin = type === 'checkbox' ? 1 : FIELD_MARGIN;
+  const fieldX = x + margin;
+  let fieldY = y + margin;
+  const fieldW = w - 2 * margin;
+  let fieldH = h - 2 * margin;
 
-  if (labelSource === 'inside' && type !== 'checkbox' && insideBlocks.length > 0) {
+  if (labelSource === 'inside' && type !== 'checkbox' && labelInsideBlocks.length > 0) {
     // The label sits near the top of the cell (high PDF y). Find the lowest
     // bottom edge of any label block — the fillable area is below that point.
-    const labelFloor = Math.min(...insideBlocks.map((b) => b.placement.y));
+    const labelFloor = Math.min(...labelInsideBlocks.map((b) => b.placement.y));
     const newTop = labelFloor - FIELD_MARGIN; // top of fillable area in PDF coords
     fieldH = newTop - fieldY;
     // If the label fills so much of the cell that there is no room, skip.
     if (fieldH < MIN_VISIBLE_HEIGHT) return;
-  } else if (insideBlocks.length === 0 && type !== 'checkbox' && h >= 20) {
+  } else if (labelInsideBlocks.length === 0 && type !== 'checkbox' && h >= 20) {
     // No inside text at all — likely a proprietary/undecodable label font.
     // Reserve a strip so the fill area doesn't overlap the label zone.
     // For inside-container Phase 1/2 cells the label is in the LOWER portion
@@ -1039,9 +1078,32 @@ function evaluateBox(
   }
 
   // Rule: the fill area must be empty space — it sits above a field underline with the
-  // label printed below (or to the left).  If any text block has ≥ 50% of its area
-  // inside the computed fill area, the box is misplaced and should be discarded.
+  // label printed below (or to the left).  Two complementary checks:
+  //   1. Block-perspective: if any text block has ≥ 50% of its own area inside the fill area,
+  //      the placement overlaps printed text → discard.
+  //   2. Fill-area-perspective: if text blocks collectively cover ≥ FILL_COVERAGE_THRESHOLD of
+  //      the fill rectangle (using clipped intersection areas), the cell is a header/label row
+  //      where a wide text block clips into the thin fill area → discard.
   if (findInsideText(fieldX, fieldY, fieldW, fieldH, textBlocks).length > 0) return;
+  // Fill-area coverage check: thin fill areas (fieldH ≤ 10pt, non-checkbox) are prone to
+  // false positives when a section-header text block partially clips in from above or below.
+  // Check using only text blocks with plausible height (at most 3× fill height or 20pt) to
+  // exclude background glyphs with inflated metrics emitted by some PDF structures.
+  if (type !== 'checkbox' && fieldH <= 10) {
+    const plausibleBlocks = textBlocks.filter(
+      (b) =>
+        b.placement.height <= Math.max(fieldH * 3, 20) &&
+        // Exclude visual placeholder blocks (underscores / dashes / spaces /
+        // date-separator slashes) that PDF forms draw as blank fill-in areas —
+        // they look like content but are structural decoration
+        // (e.g. Cigna "_____ / _____ / _____ ________").
+        b.text.replace(/[_\-/\s]/g, '').length > 0,
+    );
+    if (
+      textCoverageRatio(fieldX, fieldY, fieldW, fieldH, plausibleBlocks) >= FILL_COVERAGE_THRESHOLD
+    )
+      return;
+  }
 
   candidates.push({
     id: randomUUID(),
@@ -1156,19 +1218,30 @@ export function detectCandidateFields(
       // pdfjs-dist v5+ format: args = [paintOp, interleavedOpsAndCoords, Float32Array bbox]
       const paintOp = args[0] as number;
       const bbox = args[2] as Float32Array | number[] | null | undefined;
-      if (
-        (paintOp === OPS.stroke ||
+      if (bbox !== undefined && bbox !== null && bbox.length >= 4) {
+        const [bx0 = 0, bx1 = 0, bx2 = 0, bx3 = 0] = bbox;
+        const box = bboxToBox(ctm, bx0, bx1, bx2, bx3);
+        if (
+          paintOp === OPS.stroke ||
           paintOp === OPS.closeStroke ||
           paintOp === OPS.fillStroke ||
           paintOp === OPS.closeFillStroke ||
           paintOp === OPS.eoFillStroke ||
-          paintOp === OPS.closeEOFillStroke) &&
-        bbox !== undefined &&
-        bbox !== null &&
-        bbox.length >= 4
-      ) {
-        const [bx0 = 0, bx1 = 0, bx2 = 0, bx3 = 0] = bbox;
-        routeBox(bboxToBox(ctm, bx0, bx1, bx2, bx3));
+          paintOp === OPS.closeEOFillStroke
+        ) {
+          routeBox(box);
+        } else if (
+          (paintOp === OPS.fill || paintOp === OPS.eoFill) &&
+          box.h < MIN_VISIBLE_HEIGHT &&
+          box.w >= MIN_FIELD_WIDTH
+        ) {
+          // Some forms (e.g. Ohio BMV) draw field outlines using four thin filled
+          // hairlines (~0.5pt) instead of a single stroked rectangle.  The horizontal
+          // hairlines encode the exact x-extent and y-position of each field boundary,
+          // so collect them as H-lines — the grid-cell reconstruction will pair the
+          // top and bottom borders into fillable cells.
+          hLines.push({ x: box.x, y: box.y, w: box.w });
+        }
       }
       pendingRect = null;
     } else if (fn === OPS.fillStroke || fn === OPS.closeFillStroke) {
@@ -1374,8 +1447,12 @@ export function detectCandidateFields(
       // For Phase 2b cells, use the flipped y-range ([cell.y+cell.h, cell.y+2*cell.h])
       // to avoid pairing the artificial pre-flip span against real cells.
       const innerY = inner.phase2b ? inner.y + inner.h : inner.y;
-      // y-ranges must overlap.
+      // y-ranges must overlap, and the inner cell's bottom must not extend
+      // significantly below the outer cell's bottom (within HLINE_SNAP tolerance).
+      // This prevents Phase 2 tall cells (created from distant top boundaries) from
+      // falsely marking valid field cells as containers.
       if (innerY + inner.h <= outer.y || innerY >= outer.y + outer.h) continue;
+      if (innerY < outer.y - HLINE_SNAP) continue;
       // inner must be strictly narrower.
       if (inner.w >= outer.w) continue;
       // inner x-range must be contained within outer x-range.

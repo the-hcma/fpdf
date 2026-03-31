@@ -95,6 +95,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ## Shell Scripts
 
+- **No `.sh` extension.** Shell scripts in `scripts/` have no file extension (e.g. `scripts/fpdf`, not `scripts/fpdf.sh`). The shebang line declares the interpreter.
 - **`shellcheck`** is mandatory for all shell scripts. CI runs `shellcheck scripts/fpdf` on every push.
 - **`readonly`** must be used for every script-level variable that is assigned once and never modified. Declare and assign separately to avoid masking exit codes (SC2155):
   ```bash

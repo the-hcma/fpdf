@@ -32,7 +32,7 @@ After step 3, `fpdf` behaves identically to the globally installed package. To u
 After completing the steps above you can install a double-clickable `fpdf.app` that opens fpdf in your browser directly from Finder:
 
 ```bash
-./scripts/install-macos-app.sh
+./scripts/install-macos-app
 ```
 
 This creates `~/Applications/fpdf.app`. Double-clicking it opens a Terminal window, starts the local server, and launches the file picker in your default browser. Close the Terminal window to stop the server.
@@ -40,7 +40,7 @@ This creates `~/Applications/fpdf.app`. Double-clicking it opens a Terminal wind
 To install system-wide instead:
 
 ```bash
-./scripts/install-macos-app.sh --dest /Applications
+./scripts/install-macos-app --dest /Applications
 ```
 
 The app bakes in the path to your local clone at install time. Re-run the script if you move the repo.

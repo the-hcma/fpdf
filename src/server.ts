@@ -18,6 +18,8 @@ export interface ServerOptions {
   doc?: FpdfDocument;
   /** Absolute path to the .fpdf.json file (used for WebSocket save writes). Omit to start in picker mode. */
   jsonPath?: string;
+  /** Exit the process 1 s after the last WebSocket client disconnects. Default false. */
+  autoShutdown?: boolean;
 }
 
 export interface ServerHandle {
@@ -330,7 +332,32 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     }
   }
 
+  // Auto-shutdown: when the last browser tab closes (WS disconnect) start a
+  // 30-second grace timer. Cancel it if a new connection arrives (e.g. page
+  // refresh or picker → fill navigation). This lets the server die cleanly
+  // when the user is done without requiring a manual Ctrl-C.
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleIdleShutdown(): void {
+    if (!options.autoShutdown) return;
+    // Defer one tick — ws removes the client from wss.clients asynchronously
+    // so checking immediately on 'close' can still show size > 0.
+    setImmediate(() => {
+      if (wss.clients.size > 0) return; // other tabs still open
+      if (idleTimer !== null) return; // already scheduled
+      idleTimer = setTimeout(() => {
+        logger.info('No active connections — shutting down.');
+        void close().finally(() => {
+          process.exit(0);
+        });
+      }, 1_000);
+    });
+  }
+
   wss.on('connection', (ws: WebSocket) => {
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
     logger.debug('WebSocket client connected');
 
     ws.on('message', (raw) => {
@@ -382,6 +409,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
     ws.on('close', () => {
       logger.debug('WebSocket client disconnected');
+      scheduleIdleShutdown();
     });
   });
 

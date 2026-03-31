@@ -61,69 +61,19 @@ function setEntriesDisabled(disabled: boolean): void {
   });
 }
 
-// ── Breadcrumb ────────────────────────────────────────────────────────────────
+// ── Nav ───────────────────────────────────────────────────────────────────────
 
-function renderBreadcrumb(resolvedPath: string): void {
-  const nav = document.getElementById('breadcrumb');
-  if (!nav) return;
-  nav.innerHTML = '';
-
-  const home = getHomePlaceholder(resolvedPath);
-  const displayPath = home !== null ? '~' + resolvedPath.slice(home.length) : resolvedPath;
-  const sep = '/';
-  const segments = displayPath.split(sep).filter((s) => s !== '');
-
-  // Build the real path segments in parallel
-  const basePath = home ?? '';
-  const realSegments: string[] = [];
-
-  // Root segment
-  const rootBtn = document.createElement('button');
-  rootBtn.type = 'button';
-  rootBtn.textContent = home !== null ? '~' : '/';
-  const rootTarget = home ?? '/';
-  rootBtn.addEventListener('click', () => {
-    void browse(rootTarget);
-  });
-  nav.appendChild(rootBtn);
-
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (seg === undefined || seg === '') continue;
-    realSegments.push(seg);
-    const fullPath = basePath + sep + realSegments.join(sep);
-
-    const sepEl = document.createElement('span');
-    sepEl.className = 'breadcrumb-sep';
-    sepEl.textContent = ' / ';
-    nav.appendChild(sepEl);
-
-    if (i === segments.length - 1) {
-      // Last segment — plain text
-      const span = document.createElement('span');
-      span.textContent = seg;
-      nav.appendChild(span);
-    } else {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = seg;
-      const target = fullPath;
-      btn.addEventListener('click', () => {
-        void browse(target);
-      });
-      nav.appendChild(btn);
-    }
+function updateNav(resolvedPath: string): void {
+  const pathEl = document.getElementById('nav-path');
+  const upBtn = document.getElementById('nav-up') as HTMLButtonElement | null;
+  if (pathEl) {
+    const home = sessionStorage.getItem('fpdf-home');
+    pathEl.textContent =
+      home && (resolvedPath === home || resolvedPath.startsWith(home + '/'))
+        ? '~' + resolvedPath.slice(home.length)
+        : resolvedPath;
   }
-}
-
-// Returns the home directory prefix if resolvedPath is under it, else null.
-// We detect this by checking the server-echoed resolvedPath of the home browse.
-function getHomePlaceholder(resolvedPath: string): string | null {
-  const stored = sessionStorage.getItem('fpdf-home');
-  if (stored && (resolvedPath === stored || resolvedPath.startsWith(stored + '/'))) {
-    return stored;
-  }
-  return null;
+  if (upBtn) upBtn.disabled = resolvedPath === '/';
 }
 
 // ── Browse ────────────────────────────────────────────────────────────────────
@@ -156,7 +106,7 @@ async function browse(dirPath: string | null): Promise<void> {
 
   currentPath = data.resolvedPath;
   setStatus('');
-  renderBreadcrumb(data.resolvedPath);
+  updateNav(data.resolvedPath);
   renderEntries(data.entries);
 }
 
@@ -253,6 +203,18 @@ function initWebSocket(): void {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 document.getElementById('picker-error-dismiss')?.addEventListener('click', hideError);
+
+document.getElementById('nav-home')?.addEventListener('click', () => {
+  const home = sessionStorage.getItem('fpdf-home');
+  void browse(home ?? null);
+});
+
+document.getElementById('nav-up')?.addEventListener('click', () => {
+  if (currentPath && currentPath !== '/') {
+    const parent = currentPath.slice(0, currentPath.lastIndexOf('/')) || '/';
+    void browse(parent);
+  }
+});
 
 initDarkToggle();
 initWebSocket();

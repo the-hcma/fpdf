@@ -19,7 +19,11 @@
     <div id="picker-intro">
       <p>Browse to a PDF file and click it to start filling it out.</p>
     </div>
-    <nav id="breadcrumb" aria-label="Current folder"></nav>
+    <nav id="picker-nav" aria-label="Navigation">
+      <button id="nav-home" type="button" title="Home directory">⌂</button>
+      <button id="nav-up" type="button" title="Go up one level">↑</button>
+      <span id="nav-path"></span>
+    </nav>
     <div id="picker-status"></div>
     <ul id="entry-list" role="listbox" aria-label="Files and folders"></ul>
     <script type="module" src="pick.js"></script>

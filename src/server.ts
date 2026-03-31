@@ -330,7 +330,26 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     }
   }
 
+  // Auto-shutdown: when the last browser tab closes (WS disconnect) start a
+  // 30-second grace timer. Cancel it if a new connection arrives (e.g. page
+  // refresh or picker → fill navigation). This lets the server die cleanly
+  // when the user is done without requiring a manual Ctrl-C.
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  function scheduleIdleShutdown(): void {
+    if (wss.clients.size > 0) return; // other tabs still open
+    idleTimer = setTimeout(() => {
+      logger.info('No active connections for 30 s — shutting down.');
+      void close().finally(() => {
+        process.exit(0);
+      });
+    }, 30_000);
+  }
+
   wss.on('connection', (ws: WebSocket) => {
+    if (idleTimer !== null) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
     logger.debug('WebSocket client connected');
 
     ws.on('message', (raw) => {
@@ -382,6 +401,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
     ws.on('close', () => {
       logger.debug('WebSocket client disconnected');
+      scheduleIdleShutdown();
     });
   });
 

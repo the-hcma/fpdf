@@ -390,8 +390,10 @@ export function buildProgram(): Command {
     });
 
   // Default action: bare `fpdf` (no subcommand) starts a picker-mode server.
-  // --open is read directly from process.argv to avoid conflicting with the
-  // 'fill' subcommand's own --open option at the program level.
+  // allowUnknownOption prevents Commander from rejecting --open (or any future
+  // flag) when no subcommand is given, without consuming the flag before
+  // the 'fill' subcommand's own --open option can see it.
+  program.allowUnknownOption().allowExcessArguments();
   program.action(() => {
     const shouldOpen = process.argv.includes('--open');
     const run = async (): Promise<void> => {

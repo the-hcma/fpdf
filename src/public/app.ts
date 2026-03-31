@@ -2100,6 +2100,16 @@ function initToolbarTooltips(): void {
   toolbar.addEventListener('mouseleave', hide);
 }
 
+document.getElementById('open-picker')?.addEventListener('click', () => {
+  fetch('/reset', { method: 'POST' })
+    .then(() => {
+      window.location.replace('/');
+    })
+    .catch(() => {
+      window.location.replace('/');
+    });
+});
+
 initDarkToggle();
 initToolbarTooltips();
 main().catch((err: unknown) => {

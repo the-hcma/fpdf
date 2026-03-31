@@ -286,9 +286,22 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     });
   });
 
+  // --- Reset: return to picker mode ---
+  app.post('/reset', (_req, res) => {
+    liveDoc = null;
+    currentPdfPath = null;
+    currentJsonPath = null;
+    jsonWatcher?.close();
+    jsonWatcher = null;
+    broadcast(JSON.stringify({ type: 'pickerMode' }));
+    res.json({ ok: true });
+  });
+
   // --- Static UI assets ---
   const publicDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'public');
-  app.use(express.static(publicDir));
+  // Disable automatic index.html serving so the catch-all below can decide
+  // which shell to serve based on whether a PDF has been loaded.
+  app.use(express.static(publicDir, { index: false }));
 
   // --- Catch-all: serve pick.html in picker mode, index.html in fill mode ---
   app.get(/.*/, (_req, res) => {

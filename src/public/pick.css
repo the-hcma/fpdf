@@ -16,6 +16,17 @@
   color: var(--color-button);
 }
 
+#picker-intro {
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border-toolbar);
+}
+
+#picker-intro p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-status);
+}
+
 #breadcrumb {
   display: flex;
   align-items: center;

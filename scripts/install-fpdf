@@ -48,6 +48,23 @@ if [[ "$remove" == true ]]; then
     exit 0
   fi
   rm -rf "$app_path"
+  # Remove from the Dock if it was pinned there (best-effort via PlistBuddy)
+  dock_plist="${HOME}/Library/Preferences/com.apple.dock.plist"
+  dock_changed=false
+  count=$(/usr/libexec/PlistBuddy -c "Print :persistent-apps:" "$dock_plist" 2>/dev/null \
+    | grep -c "Dict" || true)
+  for (( i = count - 1; i >= 0; i-- )); do
+    entry=$(/usr/libexec/PlistBuddy \
+      -c "Print :persistent-apps:${i}:tile-data:file-data:_CFURLString" \
+      "$dock_plist" 2>/dev/null || true)
+    if [[ "$entry" == *"fpdf.app"* ]]; then
+      /usr/libexec/PlistBuddy -c "Delete :persistent-apps:${i}" "$dock_plist"
+      dock_changed=true
+    fi
+  done
+  if [[ "$dock_changed" == true ]]; then
+    killall Dock 2>/dev/null || true
+  fi
   echo "Removed: ${app_path}"
   exit 0
 fi
@@ -119,13 +136,13 @@ ctx.textPosition = CGPoint(
 CTLineDraw(line, ctx)
 
 // "pdf" — small, muted, bottom
-let smallFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 150, nil)
+let smallFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 450, nil)
 let pdfStr    = NSAttributedString(string: "pdf", attributes: [
     .font: smallFont as Any, .foregroundColor: mutedCrimson
 ])
 let pdfLine   = CTLineCreateWithAttributedString(pdfStr)
 let pdfBounds = CTLineGetBoundsWithOptions(pdfLine, .useGlyphPathBounds)
-ctx.textPosition = CGPoint(x: (s - pdfBounds.width) / 2, y: 130)
+ctx.textPosition = CGPoint(x: (s - pdfBounds.width) / 2, y: 60)
 CTLineDraw(pdfLine, ctx)
 
 guard let cgImage = ctx.makeImage() else { fputs("makeImage failed\n", stderr); exit(1) }
@@ -193,9 +210,10 @@ mkdir -p "${app_path}/Contents/MacOS"
 mkdir -p "${app_path}/Contents/Resources"
 
 # Launcher: run fpdf directly in the background — no Terminal window lingers.
+# Use a login shell (-l) so the user's PATH (nvm, homebrew, etc.) is available.
 # The server shuts itself down when the browser tab is closed.
 cat > "${app_path}/Contents/MacOS/fpdf" <<LAUNCHER
-#!/usr/bin/env bash
+#!/bin/bash -l
 cd '${repo_dir}' && exec ./scripts/fpdf --open
 LAUNCHER
 chmod +x "${app_path}/Contents/MacOS/fpdf"

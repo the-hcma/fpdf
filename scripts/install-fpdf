@@ -131,7 +131,7 @@ let bounds     = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
 ctx.textMatrix = .identity
 ctx.textPosition = CGPoint(
     x: (s - bounds.width)  / 2 - bounds.origin.x,
-    y: s / 2 - bounds.height / 2 - bounds.origin.y + 40
+    y: s / 2 - bounds.height / 2 - bounds.origin.y + 160
 )
 CTLineDraw(line, ctx)
 

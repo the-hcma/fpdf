@@ -16,6 +16,11 @@
 # Re-run after moving the repo to update the baked-in path.
 set -euo pipefail
 
+if [[ "$(uname)" != "Darwin" ]]; then
+  echo "error: install-macos-app only works on macOS." >&2
+  exit 1
+fi
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 repo_dir="$(dirname "$script_dir")"

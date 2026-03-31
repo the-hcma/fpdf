@@ -185,16 +185,41 @@ cp "$src_png" "${iconset}/icon_512x512@2x.png"
 
 iconutil -c icns -o "$icns_path" "$iconset"
 
-# ── Compile AppleScript app ───────────────────────────────────────────────────
-tmpscript="${tmpdir}/fpdf.applescript"
-printf '%s\n' "$applescript_content" > "$tmpscript"
+# ── Build app bundle manually ─────────────────────────────────────────────────
+# osacompile locks in the Script Editor applet icon and macOS caches it
+# aggressively. Building the bundle by hand puts our icon in from the start
+# so Launch Services picks it up on the very first registration scan.
+mkdir -p "${app_path}/Contents/MacOS"
+mkdir -p "${app_path}/Contents/Resources"
 
+# Launcher: open a Terminal window and run fpdf --open
+cat > "${app_path}/Contents/MacOS/fpdf" <<LAUNCHER
+#!/usr/bin/env bash
+osascript -e 'tell application "Terminal"' -e 'activate' -e "do script \"cd '${repo_dir}' && ./scripts/fpdf --open\"" -e 'end tell'
+LAUNCHER
+chmod +x "${app_path}/Contents/MacOS/fpdf"
+
+# Info.plist — CFBundleIconFile must match the .icns filename without extension
+cat > "${app_path}/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>fpdf</string>
+  <key>CFBundleIconFile</key><string>fpdf</string>
+  <key>CFBundleIdentifier</key><string>com.fpdf.app</string>
+  <key>CFBundleName</key><string>fpdf</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+</dict>
+</plist>
+PLIST
+
+# Icon placed before lsregister so it is discovered on the first scan
+cp "$icns_path" "${app_path}/Contents/Resources/fpdf.icns"
 mkdir -p "$dest"
-osacompile -o "$app_path" "$tmpscript"
-
-# Replace the default applet icon with ours, then force Finder to re-read the
-# bundle so the icon shows immediately without a logout/reboot.
-cp "$icns_path" "${app_path}/Contents/Resources/applet.icns"
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${app_path}"
 touch "${app_path}"
 

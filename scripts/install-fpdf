@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# install-macos-app — create fpdf.app and install it to /Applications  (macOS only)
+# install-fpdf — create fpdf.app and install it to /Applications  (macOS only)
 #
 # Requires: macOS with Xcode Command Line Tools (xcode-select --install)
 #
 # Usage:
-#   ./scripts/install-macos-app                          # install to /Applications
-#   ./scripts/install-macos-app --dest ~/Applications    # install for current user only
-#   ./scripts/install-macos-app uninstall                # remove from /Applications
-#   ./scripts/install-macos-app uninstall --dest ~/Applications
+#   ./scripts/install-fpdf                        # install to /Applications
+#   ./scripts/install-fpdf --dest ~/Applications  # install for current user only
+#   ./scripts/install-fpdf --remove               # remove from /Applications
+#   ./scripts/install-fpdf --remove --dest ~/Applications
 #
-# The app opens a Terminal window and runs `scripts/fpdf --open`, which starts
-# the local web server and launches the file picker in your default browser.
-# Close the Terminal window to stop the server.
+# The app runs fpdf --open in the background, starting the local web server
+# and launching the file picker in your default browser.
+# The server shuts down automatically when the browser tab is closed.
 #
 # Re-running is a no-op when the installed app is identical to what would be
 # built now (same repo path + same icon and AppleScript templates).
@@ -28,11 +28,11 @@ readonly script_dir
 repo_dir="$(dirname "$script_dir")"
 readonly repo_dir
 
-subcommand=""
+remove=false
 dest="/Applications"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    uninstall) subcommand="uninstall"; shift ;;
+    --remove) remove=true; shift ;;
     --dest) dest="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -41,8 +41,8 @@ readonly dest
 
 readonly app_path="${dest}/fpdf.app"
 
-# ── Uninstall ─────────────────────────────────────────────────────────────────
-if [[ "$subcommand" == "uninstall" ]]; then
+# ── Remove ────────────────────────────────────────────────────────────────────
+if [[ "$remove" == true ]]; then
   if [[ ! -e "$app_path" ]]; then
     echo "Nothing to remove: ${app_path} does not exist."
     exit 0

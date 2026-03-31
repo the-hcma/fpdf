@@ -32,23 +32,23 @@ After step 3, `fpdf` behaves identically to the globally installed package. To u
 After completing the steps above you can install a double-clickable `fpdf.app` that opens fpdf in your browser directly from Finder:
 
 ```bash
-./scripts/install-macos-app
+./scripts/install-fpdf
 ```
 
-This installs `fpdf.app` to `/Applications`. Double-clicking it opens a Terminal window, starts the local server, and launches the file picker in your default browser. Close the Terminal window to stop the server.
+This installs `fpdf.app` to `/Applications`. Double-clicking it starts the local server in the background and launches the file picker in your default browser. The server shuts down automatically when the browser tab is closed.
 
 To install for the current user only:
 
 ```bash
-./scripts/install-macos-app --dest ~/Applications
+./scripts/install-fpdf --dest ~/Applications
 ```
 
-To uninstall:
+To remove:
 
 ```bash
-./scripts/install-macos-app uninstall
+./scripts/install-fpdf --remove
 # or, if installed to ~/Applications:
-./scripts/install-macos-app uninstall --dest ~/Applications
+./scripts/install-fpdf --remove --dest ~/Applications
 ```
 
 The app bakes in the path to your local clone at install time. Re-run the script if you move the repo.

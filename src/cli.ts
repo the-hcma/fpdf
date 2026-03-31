@@ -140,7 +140,7 @@ export function buildProgram(): Command {
         const totalPages = doc.pages.length;
         const pageWord = totalPages === 1 ? 'page' : 'pages';
         const fieldWord = totalFields === 1 ? 'field' : 'fields';
-        const handle = await startServer({ pdfPath, doc, jsonPath });
+        const handle = await startServer({ pdfPath, doc, jsonPath, autoShutdown: true });
         logger.info(
           `Ready — ${doc.metadata.pdfFilename} · ${String(totalPages)} ${pageWord} · ${String(totalFields)} ${fieldWord} · ${handle.url}`,
         );
@@ -397,7 +397,7 @@ export function buildProgram(): Command {
   program.action(() => {
     const shouldOpen = process.argv.includes('--open');
     const run = async (): Promise<void> => {
-      const handle = await startServer({});
+      const handle = await startServer({ autoShutdown: true });
       logger.info(`Picker mode — open a PDF at ${handle.url}`);
       process.stdout.write(`${handle.url}\n`);
       if (shouldOpen) {

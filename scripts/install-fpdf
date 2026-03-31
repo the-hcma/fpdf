@@ -122,7 +122,7 @@ let docPath = CGPath(roundedRect: CGRect(x: 60, y: 60, width: s - 120, height: s
 ctx.setFillColor(cream); ctx.addPath(docPath); ctx.fillPath()
 
 // "@#$%" — centred, bold, crimson
-let font    = CTFontCreateWithName("Helvetica-Bold" as CFString, 230, nil)
+let font    = CTFontCreateWithName("Helvetica-Bold" as CFString, 320, nil)
 let mainStr = NSAttributedString(string: "@#$%", attributes: [
     .font: font as Any, .foregroundColor: crimson
 ])
@@ -131,18 +131,18 @@ let bounds     = CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
 ctx.textMatrix = .identity
 ctx.textPosition = CGPoint(
     x: (s - bounds.width)  / 2 - bounds.origin.x,
-    y: s / 2 - bounds.height / 2 - bounds.origin.y + 160
+    y: s / 2 - bounds.height / 2 - bounds.origin.y + 100
 )
 CTLineDraw(line, ctx)
 
 // "pdf" — small, muted, bottom
-let smallFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 450, nil)
+let smallFont = CTFontCreateWithName("Helvetica-Bold" as CFString, 180, nil)
 let pdfStr    = NSAttributedString(string: "pdf", attributes: [
     .font: smallFont as Any, .foregroundColor: mutedCrimson
 ])
 let pdfLine   = CTLineCreateWithAttributedString(pdfStr)
 let pdfBounds = CTLineGetBoundsWithOptions(pdfLine, .useGlyphPathBounds)
-ctx.textPosition = CGPoint(x: (s - pdfBounds.width) / 2, y: 60)
+ctx.textPosition = CGPoint(x: (s - pdfBounds.width) / 2, y: 120)
 CTLineDraw(pdfLine, ctx)
 
 guard let cgImage = ctx.makeImage() else { fputs("makeImage failed\n", stderr); exit(1) }

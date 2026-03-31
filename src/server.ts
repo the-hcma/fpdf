@@ -18,6 +18,8 @@ export interface ServerOptions {
   doc?: FpdfDocument;
   /** Absolute path to the .fpdf.json file (used for WebSocket save writes). Omit to start in picker mode. */
   jsonPath?: string;
+  /** Exit the process 1 s after the last WebSocket client disconnects. Default false. */
+  autoShutdown?: boolean;
 }
 
 export interface ServerHandle {
@@ -336,13 +338,19 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // when the user is done without requiring a manual Ctrl-C.
   let idleTimer: ReturnType<typeof setTimeout> | null = null;
   function scheduleIdleShutdown(): void {
-    if (wss.clients.size > 0) return; // other tabs still open
-    idleTimer = setTimeout(() => {
-      logger.info('No active connections for 30 s — shutting down.');
-      void close().finally(() => {
-        process.exit(0);
-      });
-    }, 30_000);
+    if (!options.autoShutdown) return;
+    // Defer one tick — ws removes the client from wss.clients asynchronously
+    // so checking immediately on 'close' can still show size > 0.
+    setImmediate(() => {
+      if (wss.clients.size > 0) return; // other tabs still open
+      if (idleTimer !== null) return; // already scheduled
+      idleTimer = setTimeout(() => {
+        logger.info('No active connections — shutting down.');
+        void close().finally(() => {
+          process.exit(0);
+        });
+      }, 1_000);
+    });
   }
 
   wss.on('connection', (ws: WebSocket) => {

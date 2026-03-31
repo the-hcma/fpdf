@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>fpdf — Open a PDF</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="pick.css" />
+  </head>
+  <body data-theme="dark">
+    <div id="picker-toolbar">
+      <span id="picker-title">fpdf</span>
+      <button id="dark-toggle" type="button" title="Toggle light/dark mode">☀</button>
+    </div>
+    <div id="picker-error" hidden>
+      <span id="picker-error-message"></span>
+      <button id="picker-error-dismiss" type="button">✕</button>
+    </div>
+    <div id="picker-intro">
+      <p>Browse to a PDF file and click it to start filling it out.</p>
+    </div>
+    <nav id="picker-nav" aria-label="Navigation">
+      <button id="nav-home" type="button" title="Home directory">⌂</button>
+      <button id="nav-up" type="button" title="Go up one level">↑</button>
+      <span id="nav-path"></span>
+    </nav>
+    <div id="picker-status"></div>
+    <ul id="entry-list" role="listbox" aria-label="Files and folders"></ul>
+    <script type="module" src="pick.js"></script>
+  </body>
+</html>

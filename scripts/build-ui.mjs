@@ -10,9 +10,12 @@ const out = path.join(root, 'dist', 'public');
 await mkdir(out, { recursive: true });
 
 await build({
-  entryPoints: [path.join(root, 'src', 'public', 'app.ts')],
+  entryPoints: [
+    path.join(root, 'src', 'public', 'app.ts'),
+    path.join(root, 'src', 'public', 'pick.ts'),
+  ],
   bundle: true,
-  outfile: path.join(out, 'app.js'),
+  outdir: out,
   platform: 'browser',
   target: 'es2022',
   format: 'esm',
@@ -22,6 +25,8 @@ await build({
 await Promise.all([
   copyFile(path.join(root, 'src', 'public', 'index.html'), path.join(out, 'index.html')),
   copyFile(path.join(root, 'src', 'public', 'styles.css'), path.join(out, 'styles.css')),
+  copyFile(path.join(root, 'src', 'public', 'pick.html'), path.join(out, 'pick.html')),
+  copyFile(path.join(root, 'src', 'public', 'pick.css'), path.join(out, 'pick.css')),
   copyFile(
     path.join(root, 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'),
     path.join(out, 'pdf.worker.mjs'),

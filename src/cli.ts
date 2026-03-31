@@ -389,6 +389,41 @@ export function buildProgram(): Command {
       });
     });
 
+  // Default action: bare `fpdf` (no subcommand) starts a picker-mode server.
+  // allowUnknownOption prevents Commander from rejecting --open (or any future
+  // flag) when no subcommand is given, without consuming the flag before
+  // the 'fill' subcommand's own --open option can see it.
+  program.allowUnknownOption().allowExcessArguments();
+  program.action(() => {
+    const shouldOpen = process.argv.includes('--open');
+    const run = async (): Promise<void> => {
+      const handle = await startServer({});
+      logger.info(`Picker mode — open a PDF at ${handle.url}`);
+      process.stdout.write(`${handle.url}\n`);
+      if (shouldOpen) {
+        await open(handle.url);
+      }
+      const shutdown = (): void => {
+        void handle
+          .close()
+          .catch((err: unknown) => {
+            logger.error(
+              `Server shutdown error: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          })
+          .finally(() => {
+            process.exit(0);
+          });
+      };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
+    };
+    run().catch((err: unknown) => {
+      logger.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+  });
+
   // Append per-command option tables to the top-level --help output so users
   // don't need to discover options by running `fpdf <command> --help`.
   program.addHelpText('after', () => {

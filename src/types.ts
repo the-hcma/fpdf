@@ -193,3 +193,13 @@ export interface FpdfDocument {
   metadata: FpdfMetadata;
   pages: PdfPage[];
 }
+
+export interface DirectoryEntry {
+  name: string;
+  kind: 'dir' | 'pdf';
+}
+
+export interface BrowseResponse {
+  resolvedPath: string;
+  entries: DirectoryEntry[];
+}

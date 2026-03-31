@@ -456,6 +456,9 @@ describe('startServer', () => {
         pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ServerWrite' }] }],
       };
 
+      // Let any pending watcher callbacks from the previous test settle before connecting.
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+
       // Send a WS save — this triggers a server writeFile with ignoringNextChange = true
       const savedAck = await new Promise<string>((resolve, reject) => {
         const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);

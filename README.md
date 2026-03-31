@@ -35,12 +35,20 @@ After completing the steps above you can install a double-clickable `fpdf.app` t
 ./scripts/install-macos-app
 ```
 
-This creates `~/Applications/fpdf.app`. Double-clicking it opens a Terminal window, starts the local server, and launches the file picker in your default browser. Close the Terminal window to stop the server.
+This installs `fpdf.app` to `/Applications`. Double-clicking it opens a Terminal window, starts the local server, and launches the file picker in your default browser. Close the Terminal window to stop the server.
 
-To install system-wide instead:
+To install for the current user only:
 
 ```bash
-./scripts/install-macos-app --dest /Applications
+./scripts/install-macos-app --dest ~/Applications
+```
+
+To uninstall:
+
+```bash
+./scripts/install-macos-app uninstall
+# or, if installed to ~/Applications:
+./scripts/install-macos-app uninstall --dest ~/Applications
 ```
 
 The app bakes in the path to your local clone at install time. Re-run the script if you move the repo.

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# install-macos-app — create fpdf.app and install it to ~/Applications  (macOS only)
+# install-macos-app — create fpdf.app and install it to /Applications  (macOS only)
 #
 # Requires: macOS with Xcode Command Line Tools (xcode-select --install)
 #
 # Usage:
-#   ./scripts/install-macos-app
-#   ./scripts/install-macos-app --dest /Applications   # install system-wide
+#   ./scripts/install-macos-app                          # install to /Applications
+#   ./scripts/install-macos-app --dest ~/Applications    # install for current user only
+#   ./scripts/install-macos-app uninstall                # remove from /Applications
+#   ./scripts/install-macos-app uninstall --dest ~/Applications
 #
 # The app opens a Terminal window and runs `scripts/fpdf --open`, which starts
 # the local web server and launches the file picker in your default browser.
@@ -26,9 +28,11 @@ readonly script_dir
 repo_dir="$(dirname "$script_dir")"
 readonly repo_dir
 
-dest="${HOME}/Applications"
+subcommand=""
+dest="/Applications"
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    uninstall) subcommand="uninstall"; shift ;;
     --dest) dest="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -36,6 +40,18 @@ done
 readonly dest
 
 readonly app_path="${dest}/fpdf.app"
+
+# ── Uninstall ─────────────────────────────────────────────────────────────────
+if [[ "$subcommand" == "uninstall" ]]; then
+  if [[ ! -e "$app_path" ]]; then
+    echo "Nothing to remove: ${app_path} does not exist."
+    exit 0
+  fi
+  rm -rf "$app_path"
+  echo "Removed: ${app_path}"
+  exit 0
+fi
+
 # Sidecar file inside the bundle storing a SHA-256 of AppleScript + icon source.
 # If the hash matches on re-run the installed app is already identical.
 readonly stamp_file="${app_path}/Contents/Resources/fpdf-content-hash"
@@ -176,8 +192,10 @@ printf '%s\n' "$applescript_content" > "$tmpscript"
 mkdir -p "$dest"
 osacompile -o "$app_path" "$tmpscript"
 
-# Replace the default applet icon with ours, then nudge Finder's icon cache.
+# Replace the default applet icon with ours, then force Finder to re-read the
+# bundle so the icon shows immediately without a logout/reboot.
 cp "$icns_path" "${app_path}/Contents/Resources/applet.icns"
+/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "${app_path}"
 touch "${app_path}"
 
 # Record hash so future runs can detect whether a reinstall is needed.

@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Lint shell scripts
-        run: shellcheck scripts/fpdf
+        run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
   ci:
     runs-on: ubuntu-latest

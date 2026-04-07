@@ -56,6 +56,10 @@ jobs:
           fi
 
           echo "Closing PR #${pr}: \"${title}\" (merged at ${merge_time})"
+          gh api "repos/${REPO}/issues/${pr}/comments" \
+            --method POST \
+            --field body="This PR's changes have already landed on \`main\` (merged at ${merge_time}). Closing automatically." \
+            --silent
           gh api "repos/${REPO}/pulls/${pr}" \
             --method PATCH \
             --field state=closed \

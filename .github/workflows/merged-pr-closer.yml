@@ -1,9 +1,10 @@
 name: Merged PR Closer
 
-# When Graphite merges a stack, child PRs can remain OPEN even though their
-# commits have landed on main.  This workflow detects those PRs by checking
-# for the "Merged by the [Graphite merge queue]" comment posted by
-# graphite-app[bot], then closes them automatically.
+# Open PRs can remain OPEN even after their commits land on main — either
+# because Graphite merged a stack (leaving child PRs open) or because GitHub
+# merged the PR but didn't update its state.  This workflow closes them by
+# checking (1) the GitHub API merged flag, and (2) the Graphite merge queue
+# comment as a fallback.
 on:
   push:
     branches: [main]
@@ -17,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Close open PRs that were merged by Graphite
+    - name: Close open PRs that have already been merged
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         REPO: ${{ github.repository }}
@@ -36,28 +37,32 @@ jobs:
         summary_rows=""
 
         for pr in ${open_prs}; do
-          merge_comment=$(gh api "repos/${REPO}/issues/${pr}/comments" \
-            --jq '[.[] | select(
-              .user.login == "graphite-app[bot]" and
-              (.body | test("Merged by the \\[Graphite merge queue\\]"))
-            )] | first // empty')
+          pr_data=$(gh api "repos/${REPO}/pulls/${pr}" --jq '{title: .title, merged: .merged, merged_at: .merged_at}')
+          title=$(echo "${pr_data}" | jq -r '.title')
+          is_merged=$(echo "${pr_data}" | jq -r '.merged')
+          merge_time=$(echo "${pr_data}" | jq -r '.merged_at // "unknown time"')
 
-          if [ -n "${merge_comment}" ]; then
-            title=$(gh api "repos/${REPO}/pulls/${pr}" --jq '.title')
+          if [ "${is_merged}" = "true" ]; then
+            : # merged via GitHub API — fall through to close
+          else
+            merge_comment=$(gh api "repos/${REPO}/issues/${pr}/comments" \
+              --jq '[.[] | select(
+                .performed_via_github_app.slug == "graphite-app" and
+                (.body | test("Merged by the \\[Graphite merge queue\\]"))
+              )] | first // empty')
+            [ -n "${merge_comment}" ] || { echo "PR #${pr}: open and not yet merged — skipping."; continue; }
             merge_time=$(echo "${merge_comment}" | jq -r '.body' \
               | grep -oP '\*\*[^*]+\*\*(?=: Merged)' | tr -d '*' || echo "unknown time")
-
-            echo "Closing PR #${pr}: \"${title}\" (reason: merged by Graphite merge queue at ${merge_time})"
-            gh api "repos/${REPO}/pulls/${pr}" \
-              --method PATCH \
-              --field state=closed \
-              --silent
-
-            closed_count=$((closed_count + 1))
-            summary_rows="${summary_rows}| #${pr} | ${title} | ${merge_time} |\n"
-          else
-            echo "PR #${pr}: open and not yet merged by merge queue — skipping."
           fi
+
+          echo "Closing PR #${pr}: \"${title}\" (merged at ${merge_time})"
+          gh api "repos/${REPO}/pulls/${pr}" \
+            --method PATCH \
+            --field state=closed \
+            --silent
+
+          closed_count=$((closed_count + 1))
+          summary_rows="${summary_rows}| #${pr} | ${title} | ${merge_time} |\n"
         done
 
         echo ""
@@ -69,7 +74,7 @@ jobs:
           if [ "${closed_count}" -eq 0 ]; then
             echo "No PRs needed closing."
           else
-            echo "Closed **${closed_count}** PR(s) that were already merged by the Graphite merge queue:"
+            echo "Closed **${closed_count}** PR(s) that were already merged:"
             echo ""
             echo "| PR | Title | Merged at |"
             echo "|----|-------|-----------|"

@@ -253,7 +253,7 @@ if _fpdf_check_env; then
   exec "\$user_shell" -l -c 'cd "\$FPDF_REPO" && exec ./scripts/fpdf --open' 2>>"\$HOME/Library/Logs/fpdf.log"
 else
   # Open a Terminal window so the user can complete first-time setup
-  # interactively (install Node.js, run npm install).  scripts/fpdf will
+  # interactively (install Node.js, run pnpm install).  scripts/fpdf will
   # handle all prompts and then start the server automatically.
   osascript -e "tell application \"Terminal\" to do script \"cd '\${FPDF_REPO}' && ./scripts/fpdf --open\""
 fi

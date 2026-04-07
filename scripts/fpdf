@@ -212,14 +212,14 @@ while ! command -v node &>/dev/null; do
   _reload_brew_node
 done
 
-# Check that node_modules exists (npm install has been run).
+# Check that node_modules exists (pnpm install has been run).
 while [ ! -d "$root_dir/node_modules" ]; do
   echo "[fpdf] Dependencies not installed." >&2
-  printf '%s[fpdf] Run '\''npm install'\'' now? [Y/n] %s' "$q" "$r" >&2
+  printf '%s[fpdf] Run '\''pnpm install'\'' now? [Y/n] %s' "$q" "$r" >&2
   read -r reply || { echo >&2; exit 1; }
   [[ "$reply" =~ ^[Nn] ]] && exit 0
   echo "[fpdf] Installing dependencies…" >&2
-  if npm --prefix "$root_dir" install >&2; then
+  if pnpm --dir "$root_dir" install >&2; then
     touch "$root_dir/node_modules"
     echo "[fpdf] Dependencies installed." >&2
   else
@@ -237,14 +237,14 @@ while [[ "$_fpdf_node_skip" == '0' && "$_node_major" -lt "$_min_major" ]]; do
   _node_major=$(node --version | tr -d 'v' | cut -d. -f1)
 done
 
-# Warn if node_modules is out of sync with package-lock.json.
-if [ "$root_dir/package-lock.json" -nt "$root_dir/node_modules" ]; then
-  echo "[fpdf] Dependencies may be out of date (package-lock.json has changed since last install)." >&2
-  printf '%s[fpdf] Run npm install to update? [Y/n] %s' "$q" "$r" >&2
+# Warn if node_modules is out of sync with pnpm-lock.yaml.
+if [ "$root_dir/pnpm-lock.yaml" -nt "$root_dir/node_modules" ]; then
+  echo "[fpdf] Dependencies may be out of date (pnpm-lock.yaml has changed since last install)." >&2
+  printf '%s[fpdf] Run pnpm install to update? [Y/n] %s' "$q" "$r" >&2
   read -r reply || { echo >&2; exit 1; }
   if [[ ! "$reply" =~ ^[Nn] ]]; then
     echo "[fpdf] Updating dependencies…" >&2
-    if npm --prefix "$root_dir" install >&2; then
+    if pnpm --dir "$root_dir" install >&2; then
       touch "$root_dir/node_modules"
       echo "[fpdf] Dependencies updated." >&2
     else
@@ -257,7 +257,7 @@ fi
 if [ ! -f "$root_dir/dist/cli.js" ] || \
    find "$root_dir/src" -name '*.ts' -newer "$root_dir/dist/cli.js" | grep -q .; then
   echo "[fpdf] source changed — rebuilding…" >&2
-  npm --prefix "$root_dir" run build >&2
+  pnpm --dir "$root_dir" run build >&2
 fi
 
 exec node "$root_dir/dist/cli.js" "$@"

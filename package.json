@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json && npm run build:ui",
+    "build": "tsc --project tsconfig.json && pnpm run build:ui",
     "build:ui": "node scripts/build-ui.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --project tsconfig.web.json --noEmit",
@@ -15,7 +15,7 @@
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "test": "vitest run --coverage",
-    "check": "npm run typecheck && npm run typecheck:web && npm run lint && npm run format:check"
+    "check": "pnpm run typecheck && pnpm run typecheck:web && pnpm run lint && pnpm run format:check"
   },
   "bin": {
     "fpdf": "dist/cli.js"

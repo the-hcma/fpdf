@@ -10,13 +10,13 @@ Fill PDF forms interactively in your browser, then export a completed PDF — al
 # 1. Clone and install dependencies
 git clone https://github.com/the-hcma/fpdf.git
 cd fpdf
-npm install
+pnpm install
 
 # 2. Build (TypeScript + browser assets)
-npm run build
+pnpm run build
 
 # 3. Link the CLI so `fpdf` is available on your PATH
-npm link
+pnpm link --global
 
 # 4. Fill a PDF form
 fpdf fill form.pdf --open
@@ -25,7 +25,7 @@ fpdf fill form.pdf --open
 fpdf export form.fpdf.json -o filled.pdf
 ```
 
-After step 3, `fpdf` behaves identically to the globally installed package. To unlink: `npm unlink -g fpdf`.
+After step 3, `fpdf` behaves identically to the globally installed package. To unlink: `pnpm unlink --global fpdf`.
 
 ### Optional: macOS Finder app
 
@@ -61,7 +61,7 @@ The app bakes in the path to your local clone at install time. Re-run the script
 ## Installation
 
 ```bash
-npm install -g fpdf
+pnpm add -g fpdf
 ```
 
 To build from source instead, see the [Quickstart](#quickstart-from-source).
@@ -200,12 +200,12 @@ Open the browser's print dialog while filling to print the completed form at 1:1
 See the [Quickstart](#quickstart-from-source) to get a local build running.
 
 ```bash
-npm run build          # compile TypeScript + bundle browser assets
-npm run typecheck      # tsc --noEmit
-npm run lint           # ESLint
-npm run format         # Prettier
-npm test               # Vitest with coverage
-npm run check          # full pre-commit check
+pnpm run build          # compile TypeScript + bundle browser assets
+pnpm run typecheck      # tsc --noEmit
+pnpm run lint           # ESLint
+pnpm run format         # Prettier
+pnpm test               # Vitest with coverage
+pnpm run check          # full pre-commit check
 ```
 
 ## License

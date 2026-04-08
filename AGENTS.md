@@ -28,7 +28,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
     "arrowParens": "always"
   }
   ```
-- Run `npm run format` before committing. A CI check will fail on unformatted files.
+- Run `pnpm run format` before committing. A CI check will fail on unformatted files.
 - Do not suppress Prettier with `// prettier-ignore` unless the block is machine-generated (e.g. an embedded binary blob).
 
 ---
@@ -50,7 +50,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
   - `@typescript-eslint/await-thenable`
   - `@typescript-eslint/no-unused-vars`
   - `no-console` (use a structured logger instead; see `src/logger.ts`)
-- Run `npm run lint` and resolve all errors before opening a PR. Do not use `eslint-disable` comments unless absolutely unavoidable, and every suppression must include a comment explaining why.
+- Run `pnpm run lint` and resolve all errors before opening a PR. Do not use `eslint-disable` comments unless absolutely unavoidable, and every suppression must include a comment explaining why.
 
 ---
 
@@ -87,7 +87,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - Submit stacks with `gt submit` — do not open PRs manually via the GitHub UI.
 - To merge a PR, add the `merge-it` label: `gh pr edit <number> --add-label merge-it`. Never use `gh pr merge` directly.
 - Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
-- Each commit must pass `npm run check` (type-check + lint + format check) and `npm test`.
+- Each commit must pass `pnpm run check` (type-check + lint + format check) and `pnpm test`.
 - Keep commits focused. One logical change per commit.
 - PR descriptions must reference the relevant milestone from [PLAN.md](./PLAN.md).
 - Before starting a new PR or branch, confirm the current PR is either merged or that all CI checks pass (lint, format, tests, coverage). Never start new work on a broken base.
@@ -122,7 +122,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - The Express server **must** bind to `127.0.0.1` only — never `0.0.0.0`.
 - All file paths received from the CLI or the web UI must be validated and resolved with `path.resolve` before any file system operation. Reject paths that escape the working directory.
 - No dynamic `eval`, `new Function`, or `child_process.exec` with user-controlled strings.
-- Dependencies must be reviewed before adding. Run `npm audit` after every `npm install`.
+- Dependencies must be reviewed before adding. Run `pnpm audit` after every `pnpm install`.
 
 ---
 
@@ -131,17 +131,17 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - Prefer well-maintained, typed packages. Avoid packages with no TypeScript types and no `@types/*` available.
 - Do not add a dependency for something trivially implementable in ~10 lines of TypeScript.
 - Separate `dependencies` (runtime) from `devDependencies` strictly.
-- Lock file (`package-lock.json`) must always be committed.
+- Lock file (`pnpm-lock.yaml`) must always be committed.
 
 ---
 
 ## CI Checks (all must pass)
 
 ```
-npm run typecheck    # tsc --noEmit
-npm run lint         # eslint src/
-npm run format:check # prettier --check src/
-npm test             # vitest run --coverage
+pnpm run typecheck    # tsc --noEmit
+pnpm run lint         # eslint src/
+pnpm run format:check # prettier --check src/
+pnpm test             # vitest run --coverage
 ```
 
 No PR may be merged with a failing CI check. No exceptions.

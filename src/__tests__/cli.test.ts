@@ -236,6 +236,7 @@ describe('CLI program structure', () => {
       vi.mocked(analyzePdf).mockResolvedValue(mockDoc);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -247,7 +248,7 @@ describe('CLI program structure', () => {
 
       expect(analyzePdf).toHaveBeenCalledWith(expect.stringContaining('form.pdf'));
       expect(startServer).toHaveBeenCalled();
-      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('http://127.0.0.1:12345'));
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('form.pdf'));
       expect(stdoutSpy).toHaveBeenCalledWith('http://127.0.0.1:12345\n');
 
       stdoutSpy.mockRestore();
@@ -271,6 +272,7 @@ describe('CLI program structure', () => {
       vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc) as never);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -306,6 +308,7 @@ describe('CLI program structure', () => {
       vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc) as never);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -343,6 +346,7 @@ describe('CLI program structure', () => {
       vi.mocked(analyzePdf).mockResolvedValue(freshDoc);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -377,6 +381,7 @@ describe('CLI program structure', () => {
       });
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -433,6 +438,7 @@ describe('CLI program structure', () => {
       });
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -489,6 +495,7 @@ describe('CLI program structure', () => {
       });
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -639,6 +646,7 @@ describe('CLI program structure', () => {
       vi.mocked(analyzePdf).mockResolvedValue(freshDoc as never);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
         close: vi.fn().mockResolvedValue(undefined),
       });
 

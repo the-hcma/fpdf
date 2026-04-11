@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, networkInterfaces } from 'node:os';
 import { watch } from 'node:fs';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -20,11 +20,21 @@ export interface ServerOptions {
   jsonPath?: string;
   /** Exit the process 1 s after the last WebSocket client disconnects. Default false. */
   autoShutdown?: boolean;
+  /** Hostname to bind to. Defaults to '127.0.0.1'. Use '0.0.0.0' to listen on all interfaces. */
+  host?: string;
+  /** TCP port to bind to. Defaults to 0 (OS-allocated). If specified and the port is already in use, startServer throws. */
+  port?: number;
 }
 
 export interface ServerHandle {
-  /** The base URL the server is listening on, e.g. "http://127.0.0.1:51234". */
+  /** The primary URL the server is listening on, e.g. "http://127.0.0.1:51234". */
   url: string;
+  /**
+   * All URLs the server is reachable on. When bound to a specific host this is
+   * just [url]. When bound to 0.0.0.0 this includes one entry per non-loopback
+   * IPv4 interface plus the loopback URL.
+   */
+  networkUrls: string[];
   /** Shut down the server and close all WebSocket connections. */
   close: () => Promise<void>;
 }
@@ -457,16 +467,50 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     resetJsonWatcher(path.dirname(options.jsonPath));
   }
 
-  // Bind to 127.0.0.1, port 0 (OS-allocated)
-  await new Promise<void>((resolve) => {
-    httpServer.listen(0, '127.0.0.1', resolve);
+  const bindHost = options.host ?? '127.0.0.1';
+  const bindPort = options.port ?? 0;
+
+  // Bind to the requested host/port. If an explicit port was requested and it
+  // is already in use, throw a clear error instead of retrying on a random port.
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE' && options.port !== undefined) {
+        reject(
+          new Error(
+            `Port ${String(options.port)} is already in use. Choose a different port with --port.`,
+          ),
+        );
+      } else {
+        reject(err);
+      }
+    });
+    httpServer.listen(bindPort, bindHost, resolve);
   });
 
   const addr = httpServer.address();
   if (!addr || typeof addr === 'string') {
     throw new Error('Unexpected server address format');
   }
-  const url = `http://127.0.0.1:${String(addr.port)}`;
+  const port = addr.port;
+  const url = `http://${bindHost}:${String(port)}`;
+
+  // When listening on all interfaces, collect the real LAN/loopback addresses.
+  let networkUrls: string[];
+  if (bindHost === '0.0.0.0') {
+    const ifaces = networkInterfaces();
+    const ips: string[] = ['127.0.0.1'];
+    for (const iface of Object.values(ifaces)) {
+      if (!iface) continue;
+      for (const info of iface) {
+        if (info.family === 'IPv4' && !info.internal) {
+          ips.push(info.address);
+        }
+      }
+    }
+    networkUrls = ips.map((ip) => `http://${ip}:${String(port)}`);
+  } else {
+    networkUrls = [url];
+  }
 
   const close = (): Promise<void> =>
     new Promise((resolve, reject) => {
@@ -483,5 +527,5 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       });
     });
 
-  return { url, close };
+  return { url, networkUrls, close };
 }

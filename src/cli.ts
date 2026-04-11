@@ -84,95 +84,117 @@ export function buildProgram(): Command {
     .option('--open', 'Automatically open the URL in the default browser', false)
     .option('--json <path>', 'Resume from an existing .fpdf.json session file')
     .option('--fresh', 'Ignore any existing .fpdf.json and re-analyze the PDF from scratch', false)
-    .action((file: string, opts: { open: boolean; json?: string; fresh: boolean }) => {
-      const run = async (): Promise<void> => {
-        const pdfPath = path.resolve(file);
-        const defaultJsonPath = path.join(
-          path.dirname(pdfPath),
-          `${path.basename(pdfPath, path.extname(pdfPath))}.fpdf.json`,
-        );
-        const jsonPath = opts.json ? path.resolve(opts.json) : defaultJsonPath;
+    .option(
+      '--listen-all',
+      'Bind to 0.0.0.0 instead of 127.0.0.1 (accessible on the local network)',
+      false,
+    )
+    .option('--port <number>', 'TCP port to listen on (default: OS-allocated)')
+    .action(
+      (
+        file: string,
+        opts: { open: boolean; json?: string; fresh: boolean; listenAll: boolean; port?: string },
+      ) => {
+        const run = async (): Promise<void> => {
+          const pdfPath = path.resolve(file);
+          const defaultJsonPath = path.join(
+            path.dirname(pdfPath),
+            `${path.basename(pdfPath, path.extname(pdfPath))}.fpdf.json`,
+          );
+          const jsonPath = opts.json ? path.resolve(opts.json) : defaultJsonPath;
 
-        let doc: FpdfDocument;
-        if (opts.json) {
-          // Explicit --json: load the specified file; error if it is missing.
-          const raw = await readFile(jsonPath, 'utf-8');
-          doc = JSON.parse(raw) as FpdfDocument;
-          logger.info(`Resumed session from ${jsonPath}`);
-        } else if (opts.fresh) {
-          // --fresh: skip any existing session and re-analyze unconditionally.
-          doc = await analyzePdf(pdfPath);
-          await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-          logger.info(`Fresh analysis of ${pdfPath} → ${jsonPath}`);
-        } else {
-          // Auto-detect: load the default .fpdf.json if it exists, otherwise analyze.
-          let raw: string | null = null;
-          try {
-            raw = await readFile(jsonPath, 'utf-8');
-          } catch {
-            // File absent — fall through to fresh analysis.
-          }
-          if (raw !== null) {
-            const loaded = JSON.parse(raw) as FpdfDocument;
-            if (needsRadioMigration(loaded)) {
-              logger.info(`Migrating ${jsonPath} (radio field schema updated) — re-analyzing…`);
-              doc = await migrateDoc(pdfPath, loaded);
-              await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-              logger.info(`Migration complete → ${jsonPath}`);
-            } else {
-              doc = loaded;
-              logger.info(`Resumed session from ${jsonPath}`);
-            }
-          } else {
+          let doc: FpdfDocument;
+          if (opts.json) {
+            // Explicit --json: load the specified file; error if it is missing.
+            const raw = await readFile(jsonPath, 'utf-8');
+            doc = JSON.parse(raw) as FpdfDocument;
+            logger.info(`Resumed session from ${jsonPath}`);
+          } else if (opts.fresh) {
+            // --fresh: skip any existing session and re-analyze unconditionally.
             doc = await analyzePdf(pdfPath);
             await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-            logger.info(`Analyzed ${pdfPath} → ${jsonPath}`);
+            logger.info(`Fresh analysis of ${pdfPath} → ${jsonPath}`);
+          } else {
+            // Auto-detect: load the default .fpdf.json if it exists, otherwise analyze.
+            let raw: string | null = null;
+            try {
+              raw = await readFile(jsonPath, 'utf-8');
+            } catch {
+              // File absent — fall through to fresh analysis.
+            }
+            if (raw !== null) {
+              const loaded = JSON.parse(raw) as FpdfDocument;
+              if (needsRadioMigration(loaded)) {
+                logger.info(`Migrating ${jsonPath} (radio field schema updated) — re-analyzing…`);
+                doc = await migrateDoc(pdfPath, loaded);
+                await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
+                logger.info(`Migration complete → ${jsonPath}`);
+              } else {
+                doc = loaded;
+                logger.info(`Resumed session from ${jsonPath}`);
+              }
+            } else {
+              doc = await analyzePdf(pdfPath);
+              await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
+              logger.info(`Analyzed ${pdfPath} → ${jsonPath}`);
+            }
           }
-        }
 
-        if (!hasUsableFields(doc)) {
-          logger.warn(
-            'No fillable fields detected. This PDF appears to be a print-and-fill form that fpdf cannot fill programmatically.',
+          if (!hasUsableFields(doc)) {
+            logger.warn(
+              'No fillable fields detected. This PDF appears to be a print-and-fill form that fpdf cannot fill programmatically.',
+            );
+          }
+
+          const totalFields = doc.pages.reduce((n, p) => n + p.fields.length, 0);
+          const totalPages = doc.pages.length;
+          const pageWord = totalPages === 1 ? 'page' : 'pages';
+          const fieldWord = totalFields === 1 ? 'field' : 'fields';
+          const host = opts.listenAll ? '0.0.0.0' : undefined;
+          const port = opts.port !== undefined ? parseInt(opts.port, 10) : undefined;
+          const handle = await startServer({
+            pdfPath,
+            doc,
+            jsonPath,
+            autoShutdown: true,
+            ...(host !== undefined && { host }),
+            ...(port !== undefined && { port }),
+          });
+          logger.info(
+            `Ready — ${doc.metadata.pdfFilename} · ${String(totalPages)} ${pageWord} · ${String(totalFields)} ${fieldWord}`,
           );
-        }
+          for (const u of handle.networkUrls) {
+            process.stdout.write(`${u}\n`);
+          }
 
-        const totalFields = doc.pages.reduce((n, p) => n + p.fields.length, 0);
-        const totalPages = doc.pages.length;
-        const pageWord = totalPages === 1 ? 'page' : 'pages';
-        const fieldWord = totalFields === 1 ? 'field' : 'fields';
-        const handle = await startServer({ pdfPath, doc, jsonPath, autoShutdown: true });
-        logger.info(
-          `Ready — ${doc.metadata.pdfFilename} · ${String(totalPages)} ${pageWord} · ${String(totalFields)} ${fieldWord} · ${handle.url}`,
-        );
-        process.stdout.write(`${handle.url}\n`);
+          if (opts.open) {
+            await open(handle.url);
+          }
 
-        if (opts.open) {
-          await open(handle.url);
-        }
-
-        // Keep the process alive until SIGINT / SIGTERM
-        const shutdown = (): void => {
-          void handle
-            .close()
-            .catch((err: unknown) => {
-              logger.error(
-                `Server shutdown error: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            })
-            .finally(() => {
-              process.exit(0);
-            });
+          // Keep the process alive until SIGINT / SIGTERM
+          const shutdown = (): void => {
+            void handle
+              .close()
+              .catch((err: unknown) => {
+                logger.error(
+                  `Server shutdown error: ${err instanceof Error ? err.message : String(err)}`,
+                );
+              })
+              .finally(() => {
+                process.exit(0);
+              });
+          };
+          process.on('SIGINT', shutdown);
+          process.on('SIGTERM', shutdown);
         };
-        process.on('SIGINT', shutdown);
-        process.on('SIGTERM', shutdown);
-      };
 
-      run().catch((err: unknown) => {
-        const msg = err instanceof AnalyzerError ? err.message : String(err);
-        logger.error(msg);
-        process.exit(1);
-      });
-    });
+        run().catch((err: unknown) => {
+          const msg = err instanceof AnalyzerError ? err.message : String(err);
+          logger.error(msg);
+          process.exit(1);
+        });
+      },
+    );
 
   program
     .command('analyze <file>')
@@ -395,11 +417,37 @@ export function buildProgram(): Command {
   // the 'fill' subcommand's own --open option can see it.
   program.allowUnknownOption().allowExcessArguments();
   program.action(() => {
-    const shouldOpen = process.argv.includes('--open');
+    const argv = process.argv;
+
+    // Validate picker-mode flags manually (allowUnknownOption suppresses
+    // Commander's built-in check, so we do it ourselves).
+    const pickerKnownFlags = new Set(['--open', '--listen-all', '--port']);
+    for (let i = 2; i < argv.length; i++) {
+      const arg = argv[i];
+      if (arg?.startsWith('--') !== true) continue;
+      if (!pickerKnownFlags.has(arg)) {
+        logger.error(`Unknown option: '${arg}'. Run 'fpdf --help' for usage.`);
+        process.exit(1);
+      }
+      if (arg === '--port') i++; // skip the value argument
+    }
+
+    const shouldOpen = argv.includes('--open');
+    const shouldListenAll = argv.includes('--listen-all');
+    const portIdx = argv.indexOf('--port');
+    const portArg = portIdx !== -1 ? argv[portIdx + 1] : undefined;
     const run = async (): Promise<void> => {
-      const handle = await startServer({ autoShutdown: true });
-      logger.info(`Picker mode — open a PDF at ${handle.url}`);
-      process.stdout.write(`${handle.url}\n`);
+      const host = shouldListenAll ? '0.0.0.0' : undefined;
+      const port = portArg !== undefined ? parseInt(portArg, 10) : undefined;
+      const handle = await startServer({
+        autoShutdown: true,
+        ...(host !== undefined && { host }),
+        ...(port !== undefined && { port }),
+      });
+      logger.info('Picker mode — select a PDF to get started');
+      for (const u of handle.networkUrls) {
+        process.stdout.write(`${u}\n`);
+      }
       if (shouldOpen) {
         await open(handle.url);
       }

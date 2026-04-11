@@ -212,6 +212,16 @@ while ! command -v node &>/dev/null; do
   _reload_brew_node
 done
 
+# Check that pnpm is available (node is guaranteed present at this point).
+while ! command -v pnpm &>/dev/null; do
+  echo "[fpdf] 'pnpm' is not installed (required)." >&2
+  printf '%s[fpdf] Install pnpm now via '\''npm install -g pnpm'\''? [Y/n] %s' "$q" "$r" >&2
+  read -r reply || { echo >&2; exit 1; }
+  [[ "$reply" =~ ^[Nn] ]] && exit 0
+  echo "[fpdf] Installing pnpm…" >&2
+  npm install -g pnpm >&2
+done
+
 # Check that node_modules exists (pnpm install has been run).
 while [ ! -d "$root_dir/node_modules" ]; do
   echo "[fpdf] Dependencies not installed." >&2
@@ -238,20 +248,19 @@ while [[ "$_fpdf_node_skip" == '0' && "$_node_major" -lt "$_min_major" ]]; do
 done
 
 # Warn if node_modules is out of sync with pnpm-lock.yaml.
-if [ "$root_dir/pnpm-lock.yaml" -nt "$root_dir/node_modules" ]; then
+while [ "$root_dir/pnpm-lock.yaml" -nt "$root_dir/node_modules" ]; do
   echo "[fpdf] Dependencies may be out of date (pnpm-lock.yaml has changed since last install)." >&2
   printf '%s[fpdf] Run pnpm install to update? [Y/n] %s' "$q" "$r" >&2
   read -r reply || { echo >&2; exit 1; }
-  if [[ ! "$reply" =~ ^[Nn] ]]; then
-    echo "[fpdf] Updating dependencies…" >&2
-    if pnpm --dir "$root_dir" install >&2; then
-      touch "$root_dir/node_modules"
-      echo "[fpdf] Dependencies updated." >&2
-    else
-      echo "[fpdf] Update failed — check the output above." >&2
-    fi
+  [[ "$reply" =~ ^[Nn] ]] && break
+  echo "[fpdf] Updating dependencies…" >&2
+  if pnpm --dir "$root_dir" install >&2; then
+    touch "$root_dir/node_modules"
+    echo "[fpdf] Dependencies updated." >&2
+  else
+    echo "[fpdf] Update failed — check the output above." >&2
   fi
-fi
+done
 
 # Rebuild if any source file is newer than the compiled entry point.
 if [ ! -f "$root_dir/dist/cli.js" ] || \

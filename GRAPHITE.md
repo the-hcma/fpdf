@@ -2,10 +2,6 @@
 
 Reference guide for working with Graphite (`gt`) for creating, navigating, and managing stacked pull requests.
 
-> **Project note:** All `gt` commands in this repo must be prefixed with `GRAPHITE_PROFILE=thehcma`
-> (e.g. `GRAPHITE_PROFILE=thehcma gt submit`), or export it in your shell session first:
-> `export GRAPHITE_PROFILE=thehcma`.
-
 ## Quick Reference
 
 | I want to... | Command |
@@ -201,7 +197,7 @@ After creating each PR, run appropriate linting, building, and testing:
 ### Submit the Stack
 
 ```bash
-GRAPHITE_PROFILE=thehcma gt submit --no-interactive
+gt submit --no-interactive
 ```
 
 ### Update PR Descriptions
@@ -285,7 +281,7 @@ git rebase target-branch
 git rebase --skip
 
 # 5. After rebase, use gt modify to sync graphite's tracking
-GRAPHITE_PROFILE=thehcma gt modify --no-edit
+gt modify --no-edit
 ```
 
 ### Recovering from Interrupted Rebase (Context Reset)

@@ -3,6 +3,25 @@ import type { FpdfDocument, PdfPage, PdfField, CandidateField } from '../types.j
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
+/**
+ * Generate a UUID v4.  Uses crypto.randomUUID() when available (secure
+ * contexts: HTTPS or localhost).  Falls back to crypto.getRandomValues(),
+ * which is available in all contexts including plain-HTTP remote access.
+ */
+function randomUUID(): string {
+  if (typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // RFC 4122 §4.4 — version 4, variant 10xx.
+  // Use DataView so element access is typed as number (not number|undefined).
+  const buf = crypto.getRandomValues(new Uint8Array(16));
+  const v = new DataView(buf.buffer);
+  v.setUint8(6, (v.getUint8(6) & 0x0f) | 0x40); // version 4
+  v.setUint8(8, (v.getUint8(8) & 0x3f) | 0x80); // variant 10xx
+  const hex = Array.from(buf, (b) => b.toString(16).padStart(2, '0'));
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10).join('')}`;
+}
+
 // ── Dark mode ─────────────────────────────────────────────────────────────────
 // Default is dark. localStorage key 'fpdf-theme' stores 'light' or 'dark'.
 // Applied immediately (before main()) to avoid a flash of the wrong theme.
@@ -932,7 +951,7 @@ function initEditInteractions(
         action: () => {
           const OFFSET = 10;
           const newField: CandidateField = {
-            id: crypto.randomUUID(),
+            id: randomUUID(),
             type: 'text',
             label: '',
             displayName: 'Field',
@@ -1085,7 +1104,7 @@ function initEditInteractions(
           : undefined;
 
       const newField: CandidateField = {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         type,
         label: '',
         displayName: type === 'radio' ? (groupName ?? 'RadioGroup') : 'Field',

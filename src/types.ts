@@ -203,3 +203,7 @@ export interface BrowseResponse {
   resolvedPath: string;
   entries: DirectoryEntry[];
 }
+
+export interface UiCapabilitiesResponse {
+  canBrowseServerFiles: boolean;
+}

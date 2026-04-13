@@ -183,7 +183,7 @@ function isStructuralChange(current: FpdfDocument, incoming: FpdfDocument): bool
 }
 
 function initWebSocket(
-  onSaved: (updatedAt: string) => void,
+  onSaved: (updatedAt: string, uploaded: boolean) => void,
   onReload: (doc: FpdfDocument) => void,
 ): (doc: FpdfDocument) => void {
   const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -200,7 +200,8 @@ function initWebSocket(
     const m = msg as Record<string, unknown>;
     if (m.type === 'saved') {
       const updatedAt = m.updatedAt;
-      onSaved(typeof updatedAt === 'string' ? updatedAt : new Date().toISOString());
+      const uploaded = m.uploaded === true;
+      onSaved(typeof updatedAt === 'string' ? updatedAt : new Date().toISOString(), uploaded);
     } else if (m.type === 'docReload' && typeof m.doc === 'object' && m.doc !== null) {
       onReload(m.doc as FpdfDocument);
     } else if (m.type === 'pdfRegenerated') {
@@ -254,6 +255,14 @@ function toCssFontFamily(fontName: string): string {
   if (fontName === 'Symbol') return 'Symbol, serif';
   if (fontName === 'ZapfDingbats') return 'ZapfDingbats, serif';
   return 'Helvetica, Arial, sans-serif';
+}
+
+function enforceOverlayTextStyle(el: HTMLElement): void {
+  el.style.setProperty('background', 'transparent', 'important');
+  el.style.setProperty('background-color', 'transparent', 'important');
+  el.style.setProperty('color', '#000', 'important');
+  el.style.setProperty('-webkit-text-fill-color', '#000', 'important');
+  el.style.setProperty('caret-color', '#000', 'important');
 }
 
 /**
@@ -1113,6 +1122,10 @@ function initEditInteractions(
         confidence: 'high',
         dismissed: false,
       };
+      // eslint-disable-next-line no-console
+      console.log(
+        `Field created: type=${type} placement=(x=${String(xPdf)}, y=${String(yPdf)}, w=${String(w)}, h=${String(h)})`,
+      );
       if (radioValue !== undefined) newField.radioValue = radioValue;
       if (groupName !== undefined) newField.groupName = groupName;
       safePage.candidateFields.push(newField);
@@ -1236,6 +1249,7 @@ function buildFieldElement(
 
   el.style.width = '100%';
   el.style.height = '100%';
+  enforceOverlayTextStyle(el);
   if (field.textAlign) el.style.textAlign = field.textAlign;
   if (field.fontName) el.style.fontFamily = toCssFontFamily(field.fontName);
 
@@ -1324,6 +1338,7 @@ function buildCandidateFieldElement(
 
   el.style.width = '100%';
   el.style.height = '100%';
+  enforceOverlayTextStyle(el);
   if (field.textAlign) el.style.textAlign = field.textAlign;
   if (field.fontName) el.style.fontFamily = toCssFontFamily(field.fontName);
 
@@ -1646,13 +1661,18 @@ async function main(): Promise<void> {
   initZoom();
   setStatus('Loading…');
 
+  // Detect whether this fill session was entered via POST /upload (remote access).
+  // pick.ts sets this flag in sessionStorage before navigating to fill mode.
+  const isUploadSession = sessionStorage.getItem('fpdf-upload-session') === 'true';
+  if (isUploadSession) sessionStorage.removeItem('fpdf-upload-session');
+
   let baseText = '';
 
   const [docRes, pdfRes] = await Promise.all([fetch('/doc'), fetch('/pdf')]);
   const fpdfDoc = (await docRes.json()) as FpdfDocument;
 
   const sendSave = initWebSocket(
-    (updatedAt) => {
+    (updatedAt, _uploaded) => {
       setStatus(`${baseText} · Saved at ${formatTime(updatedAt)}`);
       setSaveButtonDirty(false);
     },
@@ -1755,22 +1775,27 @@ async function main(): Promise<void> {
   if (statusEl) statusEl.title = fpdfDoc.metadata.originalPdf;
 
   // Copy-path button: write the full path to the clipboard.
+  // Not useful for upload sessions (path is a server temp dir).
   const copyPathBtn = document.getElementById('copy-path');
   if (copyPathBtn) {
-    copyPathBtn.addEventListener('click', () => {
-      navigator.clipboard.writeText(fpdfDoc.metadata.originalPdf).then(
-        () => {
-          const prev = copyPathBtn.textContent;
-          copyPathBtn.textContent = 'Copied!';
-          setTimeout(() => {
-            copyPathBtn.textContent = prev;
-          }, 1500);
-        },
-        () => {
-          /* clipboard write failed — silently ignore */
-        },
-      );
-    });
+    if (isUploadSession) {
+      copyPathBtn.setAttribute('hidden', '');
+    } else {
+      copyPathBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(fpdfDoc.metadata.originalPdf).then(
+          () => {
+            const prev = copyPathBtn.textContent;
+            copyPathBtn.textContent = 'Copied!';
+            setTimeout(() => {
+              copyPathBtn.textContent = prev;
+            }, 1500);
+          },
+          () => {
+            /* clipboard write failed — silently ignore */
+          },
+        );
+      });
+    }
   }
 
   // Show a banner when the PDF kind has limited or no support.
@@ -1877,16 +1902,37 @@ async function main(): Promise<void> {
           saveAcroFormBtn.textContent = 'Save AcroForm';
         };
 
-        fetch('/save-acroform', { method: 'POST' })
+        fetch('/save-acroform', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ doc: fpdfDoc }),
+        })
           .then(async (r) => {
             if (!r.ok) {
               const body = (await r.json()) as { error?: string };
               throw new Error(body.error ?? 'Save failed');
             }
-            const body = (await r.json()) as { path?: string };
-            saveAcroFormBtn.textContent = 'Saved!';
-            setStatus(`AcroForm PDF saved \u2192 ${body.path ?? ''}`);
-            setTimeout(resetBtn, 3000);
+            // For upload sessions the server returns PDF bytes (Content-Type: application/pdf).
+            // For disk sessions it returns JSON { ok, path }.
+            const contentType = r.headers.get('content-type') ?? '';
+            if (contentType.includes('application/pdf')) {
+              const blob = await r.blob();
+              const stem = fpdfDoc.metadata.pdfFilename.replace(/\.[^.]+$/, '');
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `${stem}.fpdf.acroform.pdf`;
+              a.click();
+              URL.revokeObjectURL(url);
+              saveAcroFormBtn.textContent = 'Downloaded!';
+              setStatus('AcroForm PDF downloaded \u2192 Downloads folder');
+              setTimeout(resetBtn, 3000);
+            } else {
+              const body = (await r.json()) as { path?: string };
+              saveAcroFormBtn.textContent = 'Saved!';
+              setStatus(`AcroForm PDF saved \u2192 ${body.path ?? ''}`);
+              setTimeout(resetBtn, 3000);
+            }
           })
           .catch((primaryErr: unknown) => {
             const errMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
@@ -2016,7 +2062,175 @@ async function main(): Promise<void> {
     debouncedSave();
   });
 
+  function openPdfInNewTab(blob: Blob): void {
+    const url = URL.createObjectURL(blob);
+    const win = window.open(url, '_blank');
+    if (win) {
+      win.addEventListener('beforeunload', () => {
+        URL.revokeObjectURL(url);
+      });
+      return;
+    }
+    URL.revokeObjectURL(url);
+  }
+
+  function escHtml(text: string): string {
+    return text
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;');
+  }
+
+  async function openUploadPreview(
+    targetWindow: Window | null,
+    pdfBlob: Blob,
+    pdfFilename: string,
+  ): Promise<void> {
+    const pdfUrl = URL.createObjectURL(pdfBlob);
+    const saveAcroformUrl = new URL('/save-acroform', window.location.origin).toString();
+    let jsonUrl: string | null = null;
+    const jsonFilename = `${fpdfDoc.metadata.pdfFilename.replace(/\.[^.]+$/, '')}.fpdf.json`;
+
+    try {
+      const jsonRes = await fetch('/session-json');
+      if (jsonRes.ok) {
+        const jsonBlob = await jsonRes.blob();
+        jsonUrl = URL.createObjectURL(jsonBlob);
+      }
+    } catch {
+      // If this fails, still render the PDF preview and show PDF download.
+    }
+
+    const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${escHtml(pdfFilename)}</title>
+    <style>
+      body { margin: 0; font-family: sans-serif; background: #f5f6f8; }
+      #bar {
+        position: sticky;
+        top: 0;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 10px 12px;
+        background: #ffffff;
+        border-bottom: 1px solid #d7dbe0;
+      }
+      #title { font-weight: 600; color: #20262d; margin-right: auto; }
+      .btn {
+        display: inline-block;
+        text-decoration: none;
+        color: #20262d;
+        border: 1px solid #c8ced6;
+        border-radius: 6px;
+        padding: 6px 10px;
+        background: #f7f9fb;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      .btn[aria-disabled="true"] {
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      #frame {
+        width: 100%;
+        height: calc(100vh - 52px);
+        border: 0;
+        display: block;
+        background: #5a6470;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <div id="title">${escHtml(pdfFilename)}</div>
+      <button id="download-bundle" class="btn" type="button">Download PDF (+ JSON)</button>
+      <button id="download-acroform" class="btn" type="button" ${fpdfDoc.metadata.pdfKind === 'acroform' ? 'hidden' : ''}>Download AcroForm</button>
+    </div>
+    <iframe id="frame" src="${pdfUrl}"></iframe>
+    <script>
+      const pdfFilename = ${JSON.stringify(pdfFilename)};
+      const jsonFilename = ${JSON.stringify(jsonFilename)};
+      const jsonUrl = ${jsonUrl === null ? 'null' : JSON.stringify(jsonUrl)};
+      const saveAcroformUrl = ${JSON.stringify(saveAcroformUrl)};
+      const acroformFilename = ${JSON.stringify(
+        `${fpdfDoc.metadata.pdfFilename.replace(/\.[^.]+$/, '')}.fpdf.acroform.pdf`,
+      )};
+      const docPayload = ${JSON.stringify(fpdfDoc).replaceAll('</', '<\\/')};
+
+      function triggerDownload(url, filename) {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+      }
+
+      document.getElementById('download-bundle')?.addEventListener('click', () => {
+        triggerDownload('${pdfUrl}', pdfFilename);
+        if (jsonUrl !== null) triggerDownload(jsonUrl, jsonFilename);
+      });
+
+      document.getElementById('download-acroform')?.addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const prev = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Preparing…';
+        try {
+          const res = await fetch(saveAcroformUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ doc: docPayload }),
+          });
+          if (!res.ok) {
+            const errBody = await res.text();
+            throw new Error(\`HTTP \${res.status}: \${errBody || 'unknown error'}\`);
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          triggerDownload(url, acroformFilename);
+          URL.revokeObjectURL(url);
+        } catch (err) {
+          console.error('AcroForm download failed:', err);
+          btn.textContent = 'Error — see console';
+          alert(\`AcroForm download failed: \${err instanceof Error ? err.message : String(err)}\`);
+        } finally {
+          btn.disabled = false;
+          if (btn.textContent === 'Preparing…') btn.textContent = prev;
+        }
+      });
+
+      window.addEventListener('beforeunload', () => {
+        URL.revokeObjectURL('${pdfUrl}');
+        ${jsonUrl ? `URL.revokeObjectURL('${jsonUrl}');` : ''}
+      });
+    </script>
+  </body>
+</html>`;
+
+    const htmlBlob = new Blob([html], { type: 'text/html' });
+    const htmlUrl = URL.createObjectURL(htmlBlob);
+
+    const win = targetWindow ?? window.open('', '_blank');
+    if (!win) {
+      URL.revokeObjectURL(htmlUrl);
+      URL.revokeObjectURL(pdfUrl);
+      if (jsonUrl !== null) URL.revokeObjectURL(jsonUrl);
+      throw new Error('Popup blocked while opening export preview');
+    }
+    win.location.href = htmlUrl;
+    setTimeout(() => {
+      URL.revokeObjectURL(htmlUrl);
+    }, 60_000);
+  }
+
   document.getElementById('export-pdf')?.addEventListener('click', () => {
+    const previewWindow = isUploadSession ? window.open('', '_blank') : null;
+
     const exportBtn = document.getElementById('export-pdf') as HTMLButtonElement | null;
     if (exportBtn) {
       exportBtn.disabled = true;
@@ -2030,15 +2244,23 @@ async function main(): Promise<void> {
       }
     };
 
-    fetch('/filled-pdf')
+    const filledFilename = `${fpdfDoc.metadata.pdfFilename.replace(/\.[^.]+$/, '')}-filled.pdf`;
+
+    fetch('/filled-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc: fpdfDoc }),
+    })
       .then(async (r) => {
         if (!r.ok) {
           const body = (await r.json()) as { error?: string };
           throw new Error(body.error ?? 'Export failed');
         }
         const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        window.open(url, '_blank');
+        if (isUploadSession) {
+          return openUploadPreview(previewWindow, blob, filledFilename).finally(resetExportBtn);
+        }
+        openPdfInNewTab(blob);
         resetExportBtn();
       })
       .catch((primaryErr: unknown) => {
@@ -2050,8 +2272,10 @@ async function main(): Promise<void> {
         }
         exportViaCanvas(fpdfDoc, pagesContainer)
           .then((blob) => {
-            const url = URL.createObjectURL(blob);
-            window.open(url, '_blank');
+            if (isUploadSession) {
+              return openUploadPreview(previewWindow, blob, filledFilename).finally(resetExportBtn);
+            }
+            openPdfInNewTab(blob);
             resetExportBtn();
           })
           .catch((canvasErr: unknown) => {

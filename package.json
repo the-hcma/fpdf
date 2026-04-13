@@ -11,7 +11,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --project tsconfig.web.json --noEmit",
-    "lint": "eslint src/ && shellcheck scripts/fpdf",
+    "lint": "eslint src/ && shellcheck scripts/fpdf scripts/dep-update",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "test": "vitest run --coverage",

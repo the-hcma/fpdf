@@ -875,10 +875,11 @@ describe('POST /open', () => {
   it('returns 409 when analysis is already in progress', async () => {
     // Mock analyzePdf to hang so we can hit the in-progress guard
     const analyzerModule = await import('../analyzer.js');
-    let resolve!: () => void;
-    const hanging = new Promise<never>((_, reject) => {
-      resolve = () => {
-        reject(new Error('cancelled'));
+    let releaseHang!: () => void;
+    // Resolve (do not reject) so the test teardown cannot leak an unhandled rejection in CI.
+    const hanging = new Promise<FpdfDocument>((resolve) => {
+      releaseHang = () => {
+        resolve(MOCK_DOC);
       };
     });
     const spy = vi.spyOn(analyzerModule, 'analyzePdf').mockReturnValueOnce(hanging);
@@ -911,8 +912,8 @@ describe('POST /open', () => {
     });
     expect(second.status).toBe(409);
 
-    resolve();
-    await first.catch(() => undefined);
+    releaseHang();
+    await first;
     spy.mockRestore();
     await h3.close();
     await settle();

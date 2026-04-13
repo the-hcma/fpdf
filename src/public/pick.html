@@ -17,7 +17,9 @@
       <button id="picker-error-dismiss" type="button">✕</button>
     </div>
     <div id="picker-intro">
-      <p>Browse to a PDF file and click it to start filling it out.</p>
+      <p id="picker-intro-message">
+        Browse to a PDF on this server, or upload one from your device below.
+      </p>
     </div>
     <nav id="picker-nav" aria-label="Navigation">
       <button id="nav-home" type="button" title="Home directory">⌂</button>
@@ -26,6 +28,38 @@
     </nav>
     <div id="picker-status"></div>
     <ul id="entry-list" role="listbox" aria-label="Files and folders"></ul>
+
+    <div id="upload-section">
+      <div id="drop-zone" role="region" aria-label="Upload a PDF from this device">
+        <p class="drop-label">
+          Drag your PDF here — or drag both your PDF and its <code>.fpdf.json</code> to resume a
+          session
+        </p>
+        <div id="upload-picker-buttons">
+          <button id="upload-btn" type="button">Choose file(s)…</button>
+        </div>
+        <input
+          id="pdf-input"
+          type="file"
+          accept=".pdf,.json"
+          multiple
+          hidden
+          aria-label="Select PDF and optional session JSON"
+        />
+      </div>
+      <div id="upload-confirm" hidden>
+        <div id="upload-confirm-pdf"></div>
+        <div id="upload-confirm-json" hidden></div>
+        <div id="upload-actions">
+          <button id="upload-cancel-btn" type="button" title="Cancel upload">✕ Cancel</button>
+          <button id="upload-go-btn" type="button">Open →</button>
+        </div>
+        <div id="upload-progress" hidden>
+          <div id="upload-progress-label">Uploading… 0%</div>
+          <progress id="upload-progress-bar" value="0" max="100"></progress>
+        </div>
+      </div>
+    </div>
     <script type="module" src="pick.js"></script>
   </body>
 </html>

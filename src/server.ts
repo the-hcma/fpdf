@@ -1,15 +1,22 @@
 import { createServer } from 'node:http';
-import { homedir, networkInterfaces } from 'node:os';
+import { homedir, networkInterfaces, tmpdir } from 'node:os';
 import { watch } from 'node:fs';
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import Busboy from 'busboy';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { logger } from './logger.js';
 import { exportPdf, exportFromImages, ExportError, type RenderedPage } from './exporter.js';
 import { regenerateAsAcroForm } from './regenerator.js';
 import { analyzePdf } from './analyzer.js';
-import type { BrowseResponse, DirectoryEntry, FpdfDocument } from './types.js';
+import type {
+  BrowseResponse,
+  DirectoryEntry,
+  FpdfDocument,
+  UiCapabilitiesResponse,
+} from './types.js';
 
 export interface ServerOptions {
   /** Absolute path to the PDF file being served. Omit to start in picker mode. */
@@ -24,6 +31,11 @@ export interface ServerOptions {
   host?: string;
   /** TCP port to bind to. Defaults to 0 (OS-allocated). If specified and the port is already in use, startServer throws. */
   port?: number;
+  /**
+   * Session ID used to name the upload temp directory (`os.tmpdir()/fpdf-<sessionId>`).
+   * Auto-generated (UUID v4) if omitted. Useful for tests to pin a predictable path.
+   */
+  sessionId?: string;
 }
 
 export interface ServerHandle {
@@ -55,10 +67,24 @@ export interface ServerHandle {
  * @returns A ServerHandle with the allocated URL and a close() function.
  */
 export async function startServer(options: ServerOptions): Promise<ServerHandle> {
+  const sessionId = options.sessionId ?? randomUUID();
+
   let liveDoc: FpdfDocument | null = options.doc ?? null;
   let currentPdfPath: string | null = options.pdfPath ?? null;
   let currentJsonPath: string | null = options.jsonPath ?? null;
   let analyzeInProgress = false;
+  /** True when the current session was opened via POST /upload (not from a server-local path). */
+  let isUploadSession = false;
+  /** Temp directory created for upload sessions; cleaned up on reset/close. */
+  let sessionTempDir: string | null = null;
+
+  async function cleanupTempDir(): Promise<void> {
+    if (sessionTempDir === null) return;
+    const dir = sessionTempDir;
+    sessionTempDir = null;
+    logger.info(`Cleaning up temp directory: '${dir}'`);
+    await rm(dir, { recursive: true, force: true });
+  }
 
   // Content of the last server-initiated write.  The file watcher compares the
   // reloaded content against this string to detect its own echo: if they match,
@@ -75,12 +101,34 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
+  const localHostAddresses = new Set<string>(['127.0.0.1', '::1']);
+  for (const iface of Object.values(networkInterfaces())) {
+    if (!iface) continue;
+    for (const info of iface) {
+      localHostAddresses.add(info.address);
+    }
+  }
+
   // --- Helpers ---
 
   // Resolves a user-supplied path to an absolute, normalised path.
   // path.resolve handles . and .. so no additional root restriction is needed.
   function resolveSafePath(requested: string): string {
     return path.resolve(requested);
+  }
+
+  function normalizeIp(raw: string | undefined): string | null {
+    if (!raw) return null;
+    if (raw.startsWith('::ffff:')) {
+      return raw.slice('::ffff:'.length);
+    }
+    return raw;
+  }
+
+  function isSameHostClient(remoteAddress: string | undefined): boolean {
+    const normalized = normalizeIp(remoteAddress);
+    if (normalized === null) return false;
+    return localHostAddresses.has(normalized);
   }
 
   // Returns the non-null doc context if the server is in fill mode.
@@ -115,14 +163,22 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   });
 
   // --- Filled PDF export ---
-  app.get('/filled-pdf', (_req, res) => {
+  const sendFilledPdf = (req: express.Request, res: express.Response): void => {
     const run = async (): Promise<void> => {
       const ctx = requireDoc(res);
       if (ctx === null) return;
-      const filled = await exportPdf(ctx.pdfPath, ctx.doc, { readOnly: true });
-      const filename = `${path.basename(ctx.pdfPath, path.extname(ctx.pdfPath))}-filled.pdf`;
+      const body = (req.body ?? {}) as { doc?: unknown };
+      const docForExport =
+        typeof body.doc === 'object' && body.doc !== null ? (body.doc as FpdfDocument) : ctx.doc;
+      const filled = await exportPdf(ctx.pdfPath, docForExport, { readOnly: true });
+      const stem = path.basename(
+        docForExport.metadata.pdfFilename,
+        path.extname(docForExport.metadata.pdfFilename),
+      );
+      const filename = `${stem}-filled.pdf`;
+      const disposition = isUploadSession ? 'attachment' : 'inline';
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
       res.setHeader('Content-Length', String(filled.length));
       res.end(Buffer.from(filled));
     };
@@ -135,6 +191,12 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       }
       res.status(500).json({ error: err instanceof ExportError ? msg : 'Failed to export PDF' });
     });
+  };
+  app.get('/filled-pdf', (req, res) => {
+    sendFilledPdf(req, res);
+  });
+  app.post('/filled-pdf', (req, res) => {
+    sendFilledPdf(req, res);
   });
 
   // --- FpdfDocument JSON ---
@@ -147,16 +209,38 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- Save candidate fields as an editable AcroForm PDF to disk ---
   // Produces <name>.fpdf.acroform.pdf alongside the source PDF.  Fields are
   // left editable so the recipient can fill them in any standard PDF viewer.
+  //
+  // For upload sessions (remote access), the file is returned as an attachment
+  // instead of being written to the server's disk.
   app.post('/save-acroform', (_req, res) => {
     const run = async (): Promise<void> => {
       const ctx = requireDoc(res);
       if (ctx === null) return;
-      const filled = await exportPdf(ctx.pdfPath, ctx.doc);
-      const base = ctx.pdfPath.replace(/\.[^.]+$/, '');
-      const outPath = `${base}.fpdf.acroform.pdf`;
-      await writeFile(outPath, filled);
-      logger.info(`Saved AcroForm PDF → ${outPath}`);
-      res.json({ ok: true, path: outPath });
+      const body = (_req.body ?? {}) as { doc?: unknown };
+      const docForExport =
+        typeof body.doc === 'object' && body.doc !== null ? (body.doc as FpdfDocument) : ctx.doc;
+      const filled = await exportPdf(ctx.pdfPath, docForExport);
+      if (isUploadSession) {
+        const stem = path.basename(
+          docForExport.metadata.pdfFilename,
+          path.extname(docForExport.metadata.pdfFilename),
+        );
+        const filename = `${stem}.fpdf.acroform.pdf`;
+        const serverPath = path.join(path.dirname(ctx.pdfPath), filename);
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Content-Length', String(filled.length));
+        res.end(Buffer.from(filled));
+        logger.info(
+          `Streamed AcroForm PDF (upload session) → '${filename}' [server path: '${serverPath}']`,
+        );
+      } else {
+        const base = ctx.pdfPath.replace(/\.[^.]+$/, '');
+        const outPath = `${base}.fpdf.acroform.pdf`;
+        await writeFile(outPath, filled);
+        logger.info(`Saved AcroForm PDF → ${outPath}`);
+        res.json({ ok: true, path: outPath });
+      }
     };
     run().catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err);
@@ -188,9 +272,14 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         heightPt: p.heightPt,
       }));
       const filled = await exportFromImages(pages, ctx.doc);
-      const filename = `${path.basename(ctx.pdfPath, path.extname(ctx.pdfPath))}-filled.pdf`;
+      const stem = path.basename(
+        ctx.doc.metadata.pdfFilename,
+        path.extname(ctx.doc.metadata.pdfFilename),
+      );
+      const filename = `${stem}-filled.pdf`;
+      const disposition = isUploadSession ? 'attachment' : 'inline';
       res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Content-Disposition', `${disposition}; filename="${filename}"`);
       res.setHeader('Content-Length', String(filled.length));
       res.end(Buffer.from(filled));
     };
@@ -254,10 +343,20 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     });
   });
 
+  // --- UI capabilities ---
+  // Browsing the server filesystem is only enabled when the UI is opened from
+  // the same host as the backend process. Remote clients can still upload.
+  app.get('/ui-capabilities', (req, res) => {
+    const response: UiCapabilitiesResponse = {
+      canBrowseServerFiles: isSameHostClient(req.socket.remoteAddress),
+    };
+    res.json(response);
+  });
+
   // --- File picker: open a PDF and transition to fill mode ---
   app.post('/open', (_req, res) => {
     const run = async (): Promise<void> => {
-      const body = _req.body as { filePath?: unknown };
+      const body = (_req.body ?? {}) as { filePath?: unknown };
       if (typeof body.filePath !== 'string' || body.filePath === '') {
         res.status(400).json({ error: 'filePath required' });
         return;
@@ -270,43 +369,230 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         res.status(409).json({ error: 'Analysis already in progress' });
         return;
       }
-      const safePath = resolveSafePath(body.filePath);
+
       analyzeInProgress = true;
-      let doc: FpdfDocument;
       try {
-        doc = await analyzePdf(safePath);
+        const safePath = resolveSafePath(body.filePath);
+        const stem = path.basename(safePath, path.extname(safePath));
+        const jsonPath = path.join(path.dirname(safePath), `${stem}.fpdf.json`);
+
+        // If a companion .fpdf.json already exists on disk, load it instead of
+        // re-analyzing (which would discard previously saved field values).
+        let existingJsonText: string | null = null;
+        try {
+          existingJsonText = await readFile(jsonPath, 'utf-8');
+        } catch {
+          // No sidecar — will analyze below.
+        }
+
+        let doc: FpdfDocument;
+        if (existingJsonText !== null) {
+          doc = JSON.parse(existingJsonText) as FpdfDocument;
+        } else {
+          doc = await analyzePdf(safePath);
+          const content = JSON.stringify(doc, null, 2);
+          lastServerWriteContent = content;
+          await writeFile(jsonPath, content, 'utf-8');
+        }
+
+        currentPdfPath = safePath;
+        currentJsonPath = jsonPath;
+        liveDoc = doc;
+        resetJsonWatcher(path.dirname(jsonPath));
+        broadcast(JSON.stringify({ type: 'pdfOpened', doc }));
+        res.json({ ok: true });
       } finally {
         analyzeInProgress = false;
       }
-      const stem = path.basename(safePath, path.extname(safePath));
-      const newJsonPath = path.join(path.dirname(safePath), `${stem}.fpdf.json`);
-      const content = JSON.stringify(doc, null, 2);
-      lastServerWriteContent = content;
-      await writeFile(newJsonPath, content, 'utf-8');
-      currentPdfPath = safePath;
-      currentJsonPath = newJsonPath;
-      liveDoc = doc;
-      resetJsonWatcher(path.dirname(newJsonPath));
-      broadcast(JSON.stringify({ type: 'pdfOpened', doc }));
-      res.json({ ok: true });
     };
     run().catch((err: unknown) => {
-      analyzeInProgress = false;
       const msg = err instanceof Error ? err.message : String(err);
       logger.error(`/open failed: ${msg}`);
       res.status(500).json({ error: msg });
     });
   });
 
+  // --- Upload: accept a PDF (+ optional session JSON) from the browser ---
+  // Used when accessing fpdf remotely; the user's PDF never lives on the server.
+  // Multipart body:
+  //   pdf  (required) — raw PDF bytes
+  //   json (optional) — companion .fpdf.json to resume a prior session
+  //
+  // Writes to os.tmpdir()/fpdf-<sessionId>/ and transitions to fill mode.
+  app.post('/upload', (req, res) => {
+    const run = async (): Promise<void> => {
+      if (analyzeInProgress) {
+        res.status(409).json({ error: 'Analysis already in progress' });
+        return;
+      }
+
+      analyzeInProgress = true;
+      try {
+        logger.info(
+          `Upload started from ${req.socket.remoteAddress ?? 'unknown'} (session ${sessionId})`,
+        );
+
+        // Clean up any previous upload temp dir, then recreate for this upload.
+        await cleanupTempDir();
+        const tempDir = path.join(tmpdir(), `fpdf-${sessionId}`);
+        await mkdir(tempDir, { recursive: true });
+
+        let pdfUploadedFilename = 'uploaded.pdf';
+        let jsonUploadedFilename: string | null = null;
+
+        const uploadedJsonContent = await new Promise<string | null>((resolve, reject) => {
+          const bb = Busboy({
+            headers: req.headers as Record<string, string>,
+            limits: { files: 2, fileSize: 100 * 1024 * 1024 },
+          });
+
+          let hasPdf = false;
+          let pdfTruncated = false;
+          let pdfSizeBytes = 0;
+          let jsonSizeBytes = 0;
+          let jsonChunks: Buffer[] | null = null;
+          const pendingWrites: Promise<void>[] = [];
+
+          bb.on('file', (fieldname, fileStream, info) => {
+            if (fieldname === 'pdf') {
+              pdfUploadedFilename = path.basename(info.filename) || 'uploaded.pdf';
+              const chunks: Buffer[] = [];
+              fileStream.on('data', (chunk: Buffer) => {
+                chunks.push(chunk);
+                pdfSizeBytes += chunk.length;
+              });
+              fileStream.on('limit', () => {
+                pdfTruncated = true;
+              });
+              fileStream.on('end', () => {
+                if (!pdfTruncated) {
+                  hasPdf = true;
+                  pendingWrites.push(
+                    writeFile(path.join(tempDir, 'orig.pdf'), Buffer.concat(chunks)),
+                  );
+                }
+              });
+            } else if (fieldname === 'json') {
+              jsonUploadedFilename = path.basename(info.filename) || 'session.fpdf.json';
+              jsonChunks = [];
+              const jc = jsonChunks;
+              fileStream.on('data', (chunk: Buffer) => {
+                jc.push(chunk);
+                jsonSizeBytes += chunk.length;
+              });
+              fileStream.on('end', () => {
+                // jsonChunks stays non-null; we'll read it in finish
+              });
+            } else {
+              fileStream.resume();
+            }
+          });
+
+          bb.on('finish', () => {
+            if (pdfTruncated) {
+              reject(new Error('PDF file exceeds the 100 MB upload limit'));
+              return;
+            }
+            if (!hasPdf) {
+              reject(new Error('pdf field is required'));
+              return;
+            }
+            const pdfPath = path.join(tempDir, 'orig.pdf');
+            const pdfMsg = `pdf='${pdfUploadedFilename}' (${String(pdfSizeBytes)} bytes) → '${pdfPath}'`;
+            const fullMsg =
+              jsonChunks !== null && jsonUploadedFilename
+                ? `${pdfMsg}, json='${jsonUploadedFilename}' (${String(jsonSizeBytes)} bytes) → '${path.join(tempDir, 'session.fpdf.json')}'`
+                : pdfMsg;
+            logger.info(`Upload received ${fullMsg}`);
+            const jsonText =
+              jsonChunks !== null ? Buffer.concat(jsonChunks).toString('utf-8') : null;
+            Promise.all(pendingWrites)
+              .then(() => {
+                resolve(jsonText);
+              })
+              .catch(reject);
+          });
+
+          bb.on('error', (err: unknown) => {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          });
+
+          req.pipe(bb);
+        });
+
+        const tempPdfPath = path.join(tempDir, 'orig.pdf');
+        const tempJsonPath = path.join(tempDir, 'session.fpdf.json');
+
+        let doc: FpdfDocument;
+        if (uploadedJsonContent !== null) {
+          doc = JSON.parse(uploadedJsonContent) as FpdfDocument;
+        } else {
+          doc = await analyzePdf(tempPdfPath);
+        }
+
+        // Keep the uploaded filename in metadata so exports use a meaningful name.
+        doc.metadata.pdfFilename = pdfUploadedFilename;
+        doc.metadata.originalPdf = tempPdfPath;
+
+        const content = JSON.stringify(doc, null, 2);
+        lastServerWriteContent = content;
+        await writeFile(tempJsonPath, content, 'utf-8');
+
+        // sessionTempDir is always set to tempDir after the first upload, so only
+        // cleanupTempDir() (called above) is needed; just assign the new path.
+        sessionTempDir = tempDir;
+        currentPdfPath = tempPdfPath;
+        currentJsonPath = tempJsonPath;
+        liveDoc = doc;
+        isUploadSession = true;
+        resetJsonWatcher(tempDir);
+        broadcast(JSON.stringify({ type: 'pdfOpened', doc, uploaded: true }));
+        res.json({ ok: true });
+      } finally {
+        analyzeInProgress = false;
+      }
+    };
+    run().catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(`/upload failed: ${msg}`);
+      res.status(500).json({ error: msg });
+    });
+  });
+
+  // --- Session JSON download (upload sessions) ---
+  // Returns the current in-memory FpdfDocument as a JSON attachment so the
+  // user can save it locally and re-upload it next time to resume their session.
+  app.get('/session-json', (_req, res) => {
+    const ctx = requireDoc(res);
+    if (ctx === null) return;
+    const content = JSON.stringify(ctx.doc, null, 2);
+    const stem = path.basename(
+      ctx.doc.metadata.pdfFilename,
+      path.extname(ctx.doc.metadata.pdfFilename),
+    );
+    const filename = `${stem}.fpdf.json`;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.end(content);
+  });
+
   // --- Reset: return to picker mode ---
   app.post('/reset', (_req, res) => {
-    liveDoc = null;
-    currentPdfPath = null;
-    currentJsonPath = null;
-    jsonWatcher?.close();
-    jsonWatcher = null;
-    broadcast(JSON.stringify({ type: 'pickerMode' }));
-    res.json({ ok: true });
+    const run = async (): Promise<void> => {
+      liveDoc = null;
+      currentPdfPath = null;
+      currentJsonPath = null;
+      isUploadSession = false;
+      jsonWatcher?.close();
+      jsonWatcher = null;
+      await cleanupTempDir();
+      broadcast(JSON.stringify({ type: 'pickerMode' }));
+      res.json({ ok: true });
+    };
+    run().catch((err: unknown) => {
+      logger.error(`/reset failed: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: String(err) });
+    });
   });
 
   // --- Static UI assets ---
@@ -408,7 +694,13 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         liveDoc = msg.doc as FpdfDocument;
         lastServerWriteContent = JSON.stringify(liveDoc, null, 2);
         await writeFile(activeJsonPath, lastServerWriteContent, 'utf-8');
-        ws.send(JSON.stringify({ type: 'saved', updatedAt: new Date().toISOString() }));
+        ws.send(
+          JSON.stringify({
+            type: 'saved',
+            updatedAt: new Date().toISOString(),
+            uploaded: isUploadSession,
+          }),
+        );
         logger.debug(`Saved ${activeJsonPath}`);
       };
 
@@ -520,9 +812,17 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       }
       httpServer.closeAllConnections();
       wss.close(() => {
-        httpServer.close((err) => {
-          if (err) reject(err);
-          else resolve();
+        httpServer.close((httpErr) => {
+          cleanupTempDir()
+            .catch((e: unknown) => {
+              logger.error(
+                `Temp dir cleanup failed: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            })
+            .finally(() => {
+              if (httpErr) reject(httpErr);
+              else resolve();
+            });
         });
       });
     });

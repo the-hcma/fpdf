@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { WebSocket } from 'ws';
 import { PDFDocument } from 'pdf-lib';
 import { startServer, type ServerHandle } from '../server.js';
-import type { BrowseResponse, FpdfDocument } from '../types.js';
+import type { BrowseResponse, FpdfDocument, UiCapabilitiesResponse } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -697,6 +697,13 @@ describe('picker mode (no doc on start)', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
   });
+
+  it('GET /ui-capabilities enables server browse for local clients', async () => {
+    const res = await fetch(`${pickerHandle.url}/ui-capabilities`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as UiCapabilitiesResponse;
+    expect(body.canBrowseServerFiles).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -884,12 +891,14 @@ describe('POST /open', () => {
     pdfDoc3.addPage([612, 792]);
     await writeFile(pdf3, await pdfDoc3.save());
 
-    // First request starts analysis (hangs)
+    // First request starts analysis (hangs). Attach the rejection handler
+    // immediately so Vitest does not flag a transient unhandled rejection when
+    // we later cancel the mock promise.
     const first = fetch(`${h3.url}/open`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ filePath: pdf3 }),
-    });
+    }).catch(() => undefined);
 
     // Give the server a tick to set analyzeInProgress = true
     await new Promise((r) => setTimeout(r, 10));
@@ -907,5 +916,385 @@ describe('POST /open', () => {
     spy.mockRestore();
     await h3.close();
     await settle();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /upload  (M15.1)
+// ---------------------------------------------------------------------------
+
+describe('POST /upload', () => {
+  let h: ServerHandle;
+  let testPdfBytes: Uint8Array;
+
+  beforeAll(async () => {
+    h = await startServer({});
+
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([612, 792]);
+    testPdfBytes = await pdfDoc.save();
+  });
+
+  afterAll(async () => {
+    await h.close();
+    await settle();
+  });
+
+  async function multipartUpload(
+    pdfBytes: Uint8Array,
+    pdfFilename: string,
+    jsonBytes?: string,
+  ): Promise<Response> {
+    const boundary = '----FormBoundaryTest';
+    const parts: Buffer[] = [];
+
+    // PDF part
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="${pdfFilename}"\r\nContent-Type: application/pdf\r\n\r\n`,
+      ),
+    );
+    parts.push(Buffer.from(pdfBytes));
+    parts.push(Buffer.from('\r\n'));
+
+    // Optional JSON part
+    if (jsonBytes !== undefined) {
+      parts.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="json"; filename="test.fpdf.json"\r\nContent-Type: application/json\r\n\r\n`,
+        ),
+      );
+      parts.push(Buffer.from(jsonBytes, 'utf-8'));
+      parts.push(Buffer.from('\r\n'));
+    }
+
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
+
+    return fetch(`${h.url}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
+      body,
+    });
+  }
+
+  it('returns 409 when analysis is already in progress', async () => {
+    const analyzerModule = await import('../analyzer.js');
+    let cancelHang!: () => void;
+    const hanging = new Promise<never>((_, reject) => {
+      cancelHang = () => {
+        reject(new Error('cancelled'));
+      };
+    });
+    const spy = vi.spyOn(analyzerModule, 'analyzePdf').mockReturnValueOnce(hanging);
+
+    const h2 = await startServer({});
+
+    const boundary = '----FormBoundaryHang';
+    const parts: Buffer[] = [
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="hang.pdf"\r\nContent-Type: application/pdf\r\n\r\n`,
+      ),
+      Buffer.from(testPdfBytes),
+      Buffer.from('\r\n'),
+      Buffer.from(`--${boundary}--\r\n`),
+    ];
+    const body = Buffer.concat(parts);
+    const makeReq = (): Promise<Response> =>
+      fetch(`${h2.url}/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': String(body.length),
+        },
+        body,
+      });
+
+    // First request starts analysis (hangs). Attach the rejection handler
+    // immediately so Vitest does not flag a transient unhandled rejection when
+    // we later cancel the mock promise.
+    const firstReq = makeReq().catch(() => undefined);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Second request should get 409
+    const second = await makeReq();
+    expect(second.status).toBe(409);
+
+    cancelHang();
+    await firstReq.catch(() => undefined);
+    spy.mockRestore();
+    await h2.close();
+    await settle();
+  });
+
+  it('returns 400-level error when no pdf field is included', async () => {
+    const boundary = '----FormBoundaryNoPdf';
+    const body = Buffer.from(`--${boundary}--\r\n`);
+    const res = await fetch(`${h.url}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
+      body,
+    });
+    // Server returns 500 with error message when pdf field is absent
+    expect(res.status).toBe(500);
+    const err = (await res.json()) as { error: string };
+    expect(err.error).toContain('pdf field');
+  });
+
+  it('accepts a valid PDF upload, analyzes it, and transitions to fill mode', async () => {
+    const res = await multipartUpload(testPdfBytes, 'upload-test.pdf');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+
+    // Server should now be in fill mode
+    const docRes = await fetch(`${h.url}/doc`);
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as FpdfDocument;
+    expect(doc.metadata.pdfFilename).toBe('upload-test.pdf');
+  });
+
+  it('broadcasts pdfOpened with uploaded:true to WS clients', async () => {
+    const h2 = await startServer({});
+    const wsUrl = h2.url.replace('http://', 'ws://') + '/ws';
+    const ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve) => ws.once('open', resolve));
+
+    const opened = new Promise<Record<string, unknown>>((resolve) => {
+      ws.on('message', (data: Buffer | string) => {
+        const raw = Buffer.isBuffer(data) ? data.toString('utf-8') : data;
+        const msg = JSON.parse(raw) as Record<string, unknown>;
+        if (msg.type === 'pdfOpened') resolve(msg);
+      });
+    });
+
+    const pdfDoc2 = await PDFDocument.create();
+    pdfDoc2.addPage([612, 792]);
+    const pdfBytes2 = await pdfDoc2.save();
+
+    const boundary = '----FormBoundaryWsTest';
+    const parts: Buffer[] = [];
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="ws-upload.pdf"\r\nContent-Type: application/pdf\r\n\r\n`,
+      ),
+    );
+    parts.push(Buffer.from(pdfBytes2));
+    parts.push(Buffer.from('\r\n'));
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
+
+    await fetch(`${h2.url}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
+      body,
+    });
+
+    const msg = await opened;
+    expect(msg.type).toBe('pdfOpened');
+    expect(msg.uploaded).toBe(true);
+
+    ws.close();
+    await h2.close();
+    await settle();
+  });
+
+  it('resumes from companion JSON when provided', async () => {
+    const h3 = await startServer({});
+
+    const pdfDoc3 = await PDFDocument.create();
+    pdfDoc3.addPage([612, 792]);
+    const pdfBytes3 = await pdfDoc3.save();
+
+    const sessionDoc: FpdfDocument = {
+      ...MOCK_DOC,
+      metadata: {
+        ...MOCK_DOC.metadata,
+        pdfFilename: 'resume.pdf',
+        originalPdf: '/tmp/resume.pdf',
+      },
+      pages: [
+        {
+          ...(MOCK_DOC.pages[0] ?? {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'acroform' as const,
+            fields: [],
+            candidateFields: [],
+            textBlocks: [],
+          }),
+          fields: [
+            {
+              ...(MOCK_DOC.pages[0]?.fields[0] ?? {
+                id: 'x',
+                name: 'x',
+                type: 'text' as const,
+                label: '',
+                displayName: '',
+                placement: { x: 0, y: 0, width: 0, height: 0 },
+                value: '',
+                required: false,
+                readOnly: false,
+                options: [],
+              }),
+              value: 'RestoredValue',
+            },
+          ],
+        },
+      ],
+    };
+
+    const boundary = '----FormBoundaryJsonResume';
+    const parts: Buffer[] = [];
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="resume.pdf"\r\nContent-Type: application/pdf\r\n\r\n`,
+      ),
+    );
+    parts.push(Buffer.from(pdfBytes3));
+    parts.push(Buffer.from('\r\n'));
+
+    const jsonStr = JSON.stringify(sessionDoc, null, 2);
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="json"; filename="resume.fpdf.json"\r\nContent-Type: application/json\r\n\r\n`,
+      ),
+    );
+    parts.push(Buffer.from(jsonStr, 'utf-8'));
+    parts.push(Buffer.from('\r\n'));
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
+
+    await fetch(`${h3.url}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
+      body,
+    });
+
+    const docRes = await fetch(`${h3.url}/doc`);
+    const doc = (await docRes.json()) as FpdfDocument;
+    expect(doc.pages[0]?.fields[0]?.value).toBe('RestoredValue');
+
+    await h3.close();
+    await settle();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /session-json  (M15.5)
+// ---------------------------------------------------------------------------
+
+describe('GET /session-json', () => {
+  it('returns 503 when no doc is loaded', async () => {
+    const h = await startServer({});
+    const res = await fetch(`${h.url}/session-json`);
+    expect(res.status).toBe(503);
+    await h.close();
+    await settle();
+  });
+
+  it('returns JSON attachment with the current doc', async () => {
+    const res = await fetch(`${baseUrl}/session-json`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    const disposition = res.headers.get('content-disposition') ?? '';
+    expect(disposition).toContain('attachment');
+    expect(disposition).toContain('.fpdf.json');
+    const body = (await res.json()) as FpdfDocument;
+    expect(body.metadata.pdfFilename).toBe('test.pdf');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /save-acroform — upload session streams bytes  (M15.4)
+// ---------------------------------------------------------------------------
+
+describe('POST /save-acroform (upload session)', () => {
+  it('returns PDF bytes as attachment instead of writing to disk', async () => {
+    const h = await startServer({});
+
+    // Upload a real PDF to put the server into upload-session mode
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([612, 792]);
+    const form = pdfDoc.getForm();
+    const tf = form.createTextField('field1');
+    tf.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
+    const pdfBytes = await pdfDoc.save();
+
+    const boundary = '----FormBoundarySaveAcro';
+    const parts: Buffer[] = [];
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="pdf"; filename="save-acro.pdf"\r\nContent-Type: application/pdf\r\n\r\n`,
+      ),
+    );
+    parts.push(Buffer.from(pdfBytes));
+    parts.push(Buffer.from('\r\n'));
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
+
+    await fetch(`${h.url}/upload`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': String(body.length),
+      },
+      body,
+    });
+
+    // Now save-acroform should return bytes, not JSON
+    const saveRes = await fetch(`${h.url}/save-acroform`, { method: 'POST' });
+    expect(saveRes.status).toBe(200);
+    const contentType = saveRes.headers.get('content-type') ?? '';
+    expect(contentType).toContain('application/pdf');
+    const disposition = saveRes.headers.get('content-disposition') ?? '';
+    expect(disposition).toContain('attachment');
+    expect(disposition).toContain('save-acro.fpdf.acroform.pdf');
+
+    const buf = await saveRes.arrayBuffer();
+    expect(Buffer.from(buf).subarray(0, 4).toString()).toBe('%PDF');
+
+    await h.close();
+    await settle();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WS saved ack includes uploaded flag  (M15.4)
+// ---------------------------------------------------------------------------
+
+describe('WebSocket saved ack — uploaded flag', () => {
+  it('includes uploaded:false in the ack for a non-upload session', async () => {
+    const mockPage = MOCK_DOC.pages[0];
+    if (!mockPage) throw new Error('fixture missing page');
+
+    const reply = await new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'save', doc: MOCK_DOC }));
+      });
+      ws.on('message', (data) => {
+        ws.close();
+        resolve(Buffer.from(data as Buffer).toString('utf-8'));
+      });
+      ws.on('error', reject);
+    });
+
+    const ack = JSON.parse(reply) as { type: string; uploaded: boolean };
+    expect(ack.type).toBe('saved');
+    expect(ack.uploaded).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ import {
   PDFAcroCheckBox,
   StandardFonts,
   TextAlignment,
+  degrees,
   rgb,
 } from 'pdf-lib';
 
@@ -380,6 +381,40 @@ function buildFontSizeMap(
 }
 
 /**
+ * Convert a visual-space text anchor (x = left start of text, y = baseline from visual bottom)
+ * to the raw PDF content-stream draw coordinates required by pdf-lib.
+ *
+ * Candidate field placements are stored in visual space: y-up from the visual bottom-left
+ * corner of the page, after any viewer rotation is applied.  pdf-lib draws into the raw
+ * content stream (pre-rotation).  For each /Rotate value we must invert the transform:
+ *
+ *   0°  : no change
+ *   90° : page is rotated CW 90° by viewer → visual (vx, vy) maps to raw (vy, pageW − vx)
+ *         text must be drawn at 90° so it appears upright after the viewer applies its rotation
+ *   180°: visual (vx, vy) maps to raw (pageW − vx, pageH − vy), text drawn at 180°
+ *   270°: page is rotated CCW 90° by viewer → visual (vx, vy) maps to raw (pageH − vy, vx)
+ *         text must be drawn at 270°
+ */
+function resolveDrawCoords(
+  visX: number,
+  visY: number,
+  pageWidth: number,
+  pageHeight: number,
+  rotation: number,
+): { drawX: number; drawY: number; drawRot: ReturnType<typeof degrees> } {
+  if (rotation === 90) {
+    return { drawX: visY, drawY: pageWidth - visX, drawRot: degrees(90) };
+  }
+  if (rotation === 180) {
+    return { drawX: pageWidth - visX, drawY: pageHeight - visY, drawRot: degrees(180) };
+  }
+  if (rotation === 270) {
+    return { drawX: pageHeight - visY, drawY: visX, drawRot: degrees(270) };
+  }
+  return { drawX: visX, drawY: visY, drawRot: degrees(0) };
+}
+
+/**
  * Stamp candidate field values directly onto the page as drawn text.
  * Used for PDFs that have no AcroForm widgets (vector/no-acroform PDFs).
  * Each candidate field with a non-empty value gets a text overlay drawn at
@@ -403,21 +438,40 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
 
     // pdf-lib pages are 1-indexed via getPage(index) where index is 0-based.
     const page = pdfDoc.getPage(docPage.pageNumber - 1);
+    // Page rotation (0, 90, 180, 270): candidate field placements are stored in
+    // visual (post-rotation) coordinate space, so we must convert to the raw PDF
+    // content-stream space before drawing.  Only 0° and 180° are handled; 90°/270°
+    // fall back to 0° (a separate fix is needed if those rotations are encountered).
+    const pageRotation = page.getRotation().angle;
+    const pageWidth = docPage.widthPt;
+    const pageHeight = docPage.heightPt;
 
     for (const candidate of candidatesWithValues) {
-      const { x, y, width, height } = candidate.placement;
+      const { x: vx, y: vy, width, height } = candidate.placement;
       const fontSize = Math.max(6, Math.round(height * 0.7));
 
       if (candidate.type === 'checkbox') {
         // Draw a centred "X" for checked checkboxes.
         const mark = 'X';
         const markSize = Math.max(6, Math.round(height * 0.8));
+        const markWidth = font.widthOfTextAtSize(mark, markSize);
+        // Visual start x of mark (centred horizontally) and baseline y (centred vertically).
+        const visMarkX = vx + (width - markWidth) / 2;
+        const visMarkY = vy + (height - markSize) / 2;
+        const { drawX, drawY, drawRot } = resolveDrawCoords(
+          visMarkX,
+          visMarkY,
+          pageWidth,
+          pageHeight,
+          pageRotation,
+        );
         page.drawText(mark, {
-          x: x + (width - font.widthOfTextAtSize(mark, markSize)) / 2,
-          y: y + (height - markSize) / 2,
+          x: drawX,
+          y: drawY,
           size: markSize,
           font,
           color: COLOR,
+          rotate: drawRot,
         });
       } else {
         const value = candidate.value as string;
@@ -427,21 +481,33 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
           size -= 0.5;
         }
         const textWidth = font.widthOfTextAtSize(value, size);
-        let textX: number;
+        // Compute the visual left-start x of the text (alignment in visual space).
+        let textVisX: number;
         if (candidate.textAlign === 'center') {
-          textX = x + (width - textWidth) / 2;
+          textVisX = vx + (width - textWidth) / 2;
         } else if (candidate.textAlign === 'right') {
-          textX = x + width - textWidth - TEXT_PADDING;
+          textVisX = vx + width - textWidth - TEXT_PADDING;
         } else {
-          textX = x + TEXT_PADDING;
+          textVisX = vx + TEXT_PADDING;
         }
+        const textVisY = vy + TEXT_PADDING;
+        const { drawX, drawY, drawRot } = resolveDrawCoords(
+          textVisX,
+          textVisY,
+          pageWidth,
+          pageHeight,
+          pageRotation,
+        );
         page.drawText(value, {
-          x: textX,
-          y: y + TEXT_PADDING,
+          x: drawX,
+          y: drawY,
           size,
           font,
           color: COLOR,
-          maxWidth: width - TEXT_PADDING * 2,
+          rotate: drawRot,
+          // maxWidth only applies to unrotated draws; the size-clamping loop above
+          // already ensures the text fits horizontally.
+          ...(pageRotation === 0 ? { maxWidth: width - TEXT_PADDING * 2 } : {}),
         });
       }
     }
@@ -510,7 +576,20 @@ function createCandidateWidgets(
     let selectedOption: string | undefined;
     for (const { candidate: c, pageIdx } of buttons) {
       const optVal = c.radioValue ?? 'option';
-      rg.addOptionToPage(optVal, pdfDoc.getPage(pageIdx), c.placement);
+      const btnPage = pdfDoc.getPage(pageIdx);
+      const btnRotation = btnPage.getRotation().angle;
+      const btnPageW = doc.pages[pageIdx]?.widthPt ?? 0;
+      const btnPageH = doc.pages[pageIdx]?.heightPt ?? 0;
+      const rawRect = toRawRect(
+        c.placement.x,
+        c.placement.y,
+        c.placement.width,
+        c.placement.height,
+        btnPageW,
+        btnPageH,
+        btnRotation,
+      );
+      rg.addOptionToPage(optVal, btnPage, rawRect);
       if (typeof c.value === 'string' && c.value === c.radioValue) selectedOption = optVal;
     }
     if (selectedOption !== undefined) rg.select(selectedOption);
@@ -519,14 +598,19 @@ function createCandidateWidgets(
   // Text, textarea, and checkbox candidates — processed per page in order.
   for (const docPage of doc.pages) {
     const page = pdfDoc.getPage(docPage.pageNumber - 1);
+    const pageRotation = page.getRotation().angle;
+    const pageW = docPage.widthPt;
+    const pageH = docPage.heightPt;
     for (const c of docPage.candidateFields) {
       if (c.dismissed || c.type === 'radio') continue;
       const name = uniqueFieldName(c.displayName || c.label || 'Field', usedNames);
       const { x, y, width, height } = c.placement;
+      const rawRect = toRawRect(x, y, width, height, pageW, pageH, pageRotation);
       if (c.type === 'checkbox') {
         const cb = form.createCheckBox(name);
-        cb.addToPage(page, { x, y, width, height });
+        cb.addToPage(page, rawRect);
         makeWidgetTransparent(pdfDoc, cb);
+        if (pageRotation !== 0) setWidgetRotation(pdfDoc, cb, pageRotation);
         if (c.value === true) cb.check();
         if (readOnly) cb.enableReadOnly();
         cb.updateAppearances();
@@ -534,8 +618,9 @@ function createCandidateWidgets(
         const tf = form.createTextField(name);
         const multiline = c.type === 'textarea';
         if (multiline) tf.enableMultiline();
-        tf.addToPage(page, { x, y, width, height });
+        tf.addToPage(page, rawRect);
         makeWidgetTransparent(pdfDoc, tf);
+        if (pageRotation !== 0) setWidgetRotation(pdfDoc, tf, pageRotation);
         const value = typeof c.value === 'string' ? c.value : '';
         if (value !== '') tf.setText(value);
         const align = toTextAlignment(c.textAlign);
@@ -568,6 +653,48 @@ function createCandidateWidgets(
         if (font !== undefined) tf.updateAppearances(font);
       }
     }
+  }
+}
+
+/**
+ * Convert a candidate field placement (visual space, y-up from visual bottom-left)
+ * to the raw PDF coordinate rect expected by pdf-lib's addToPage / addOptionToPage.
+ *
+ * For 0°, visual space == raw PDF space (identity).
+ * For 180°, both axes are flipped around the page centre.
+ * 90° and 270° additionally swap the apparent width/height; those cases are not
+ * yet handled and fall back to the identity (0°) transform.
+ */
+function toRawRect(
+  vx: number,
+  vy: number,
+  vw: number,
+  vh: number,
+  pageW: number,
+  pageH: number,
+  rotation: number,
+): { x: number; y: number; width: number; height: number } {
+  if (rotation === 180) {
+    return { x: pageW - vx - vw, y: pageH - vy - vh, width: vw, height: vh };
+  }
+  return { x: vx, y: vy, width: vw, height: vh };
+}
+
+/**
+ * Set the widget annotation rotation (/MK /R) for every widget in a field.
+ * This must be called AFTER makeWidgetTransparent (which deletes /MK entirely)
+ * and BEFORE updateAppearances so pdf-lib generates an appearance stream that
+ * counter-rotates the text, making it appear upright after the page rotation is
+ * applied by the viewer.
+ */
+function setWidgetRotation(
+  pdfDoc: PDFDocument,
+  field: { acroField: { getWidgets(): { dict: PDFDict }[] } },
+  rotation: number,
+): void {
+  for (const widget of field.acroField.getWidgets()) {
+    const mkDict = pdfDoc.context.obj({ R: PDFNumber.of(rotation) });
+    widget.dict.set(PDFName.of('MK'), mkDict);
   }
 }
 

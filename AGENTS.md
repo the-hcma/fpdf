@@ -60,6 +60,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - **Coverage threshold** (enforced in CI): lines ≥ 80%, branches ≥ 73%, functions ≥ 80%. The branch threshold is set to 73% (not 75%) because Node.js v8 coverage measures ~2% lower than Node 25 for the same code.
 - Every public function in `src/` must have at least one unit test.
 - Tests must be **deterministic**: no `Math.random()`, no un-mocked `Date.now()`, no real file I/O in unit tests (use `vi.mock` or in-memory fixtures).
+- Fixed-delay sleeps in tests are prohibited (e.g. `setTimeout(50)`, `await new Promise((r) => setTimeout(r, n))`) because they are a flake smell. Use condition-based synchronization (`vi.waitFor`, explicit events, observable state transitions) instead.
 - Use **real file fixtures** (stored in `src/__tests__/fixtures/`) only in integration tests, clearly marked with a `// integration` comment at the top of the file.
 - Test file naming: `<module>.test.ts` mirrors the source file it covers.
 - Each test must have a descriptive name that reads as a sentence: `it('returns an error when the PDF has no AcroForm', ...)`.

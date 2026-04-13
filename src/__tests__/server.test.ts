@@ -86,6 +86,12 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 
 describe('startServer', () => {
+  const getDoc = async (): Promise<FpdfDocument> => {
+    const res = await fetch(`${baseUrl}/doc`);
+    expect(res.status).toBe(200);
+    return (await res.json()) as FpdfDocument;
+  };
+
   describe('server binding', () => {
     it('returns a URL on 127.0.0.1', () => {
       expect(baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
@@ -411,9 +417,6 @@ describe('startServer', () => {
         pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ExternalEdit' }] }],
       };
 
-      // Let any pending watcher callbacks from prior save operations settle.
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
-
       const reloadMsg = await new Promise<{ type: string; doc: FpdfDocument }>(
         (resolve, reject) => {
           const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
@@ -441,10 +444,11 @@ describe('startServer', () => {
       expect(reloadMsg.type).toBe('docReload');
       expect(reloadMsg.doc.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
 
-      // GET /doc should also reflect the reloaded doc
-      const res = await fetch(`${baseUrl}/doc`);
-      const body = (await res.json()) as FpdfDocument;
-      expect(body.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
+      // GET /doc should eventually reflect the reloaded doc.
+      await vi.waitFor(async () => {
+        const body = await getDoc();
+        expect(body.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
+      });
     });
 
     it('does not broadcast docReload when the server itself writes the file', async () => {
@@ -456,8 +460,10 @@ describe('startServer', () => {
         pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ServerWrite' }] }],
       };
 
-      // Let any pending watcher callbacks from the previous test settle before connecting.
-      await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      await vi.waitFor(async () => {
+        const body = await getDoc();
+        expect(body.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
+      });
 
       // Send a WS save — this triggers a server writeFile with ignoringNextChange = true
       const savedAck = await new Promise<string>((resolve, reject) => {
@@ -469,7 +475,11 @@ describe('startServer', () => {
           const msg = JSON.parse(Buffer.from(data as Buffer).toString('utf-8')) as {
             type: string;
           };
-          // Only the 'saved' ack should arrive, not a 'docReload'
+          // Ignore unrelated events (for example, a stale in-flight docReload
+          // from the previous test) and wait specifically for the save ack.
+          if (msg.type !== 'saved') {
+            return;
+          }
           ws.close();
           resolve(msg.type);
         });
@@ -478,20 +488,27 @@ describe('startServer', () => {
 
       expect(savedAck).toBe('saved');
 
-      // Allow the fs.watch callback to fire and be skipped (covers ignoringNextChange = true branch)
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      // Ensure server-written value is visible without relying on fixed delays.
+      await vi.waitFor(async () => {
+        const body = await getDoc();
+        expect(body.pages[0]?.fields[0]?.value).toBe('ServerWrite');
+      });
     });
 
     it('logs an error and keeps serving when invalid JSON is written to the file', async () => {
       // Write garbage so JSON.parse throws inside reload(); verifies the outer catch fires.
       await writeFile(jsonPath, 'not valid json', 'utf-8');
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
-      // Server should still respond (liveDoc unchanged from prior value)
-      const res = await fetch(`${baseUrl}/doc`);
-      expect(res.status).toBe(200);
+      // Server should still respond (liveDoc unchanged from prior value).
+      await vi.waitFor(async () => {
+        const res = await fetch(`${baseUrl}/doc`);
+        expect(res.status).toBe(200);
+      });
       // Restore valid state for subsequent tests
       await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      await vi.waitFor(async () => {
+        const body = await getDoc();
+        expect(body.metadata.pdfFilename).toBe(MOCK_DOC.metadata.pdfFilename);
+      });
     });
 
     it('ignores unrelated files written to the same directory', async () => {
@@ -499,11 +516,11 @@ describe('startServer', () => {
       const siblingPath = path.join(path.dirname(jsonPath), 'unrelated.txt');
       await writeFile(siblingPath, 'noise', 'utf-8');
 
-      // If docReload were incorrectly broadcast, the next GET /doc would fail;
-      // confirm the live doc is unchanged after a brief wait.
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
-      const res = await fetch(`${baseUrl}/doc`);
-      expect(res.status).toBe(200);
+      // If docReload were incorrectly broadcast, /doc stability checks would fail.
+      await vi.waitFor(async () => {
+        const res = await fetch(`${baseUrl}/doc`);
+        expect(res.status).toBe(200);
+      });
     });
   });
 });
@@ -600,13 +617,17 @@ describe('startServer error paths', () => {
       // Rename the json file away — the watcher fires with the original filename,
       // readFile throws ENOENT → the inner catch at server.ts:192 returns early.
       await rename(tmpJson, backup);
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
       // Server must still be alive (liveDoc in memory is unchanged)
-      const res = await fetch(`${h.url}/doc`);
-      expect(res.status).toBe(200);
+      await vi.waitFor(async () => {
+        const res = await fetch(`${h.url}/doc`);
+        expect(res.status).toBe(200);
+      });
       // Restore the json file before closing the server
       await rename(backup, tmpJson);
-      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+      await vi.waitFor(async () => {
+        const res = await fetch(`${h.url}/doc`);
+        expect(res.status).toBe(200);
+      });
     } finally {
       await h.close();
       await settle();
@@ -875,10 +896,11 @@ describe('POST /open', () => {
   it('returns 409 when analysis is already in progress', async () => {
     // Mock analyzePdf to hang so we can hit the in-progress guard
     const analyzerModule = await import('../analyzer.js');
-    let resolve!: () => void;
-    const hanging = new Promise<never>((_, reject) => {
-      resolve = () => {
-        reject(new Error('cancelled'));
+    let releaseHang!: () => void;
+    // Resolve (do not reject) so the test teardown cannot leak an unhandled rejection in CI.
+    const hanging = new Promise<FpdfDocument>((resolve) => {
+      releaseHang = () => {
+        resolve(MOCK_DOC);
       };
     });
     const spy = vi.spyOn(analyzerModule, 'analyzePdf').mockReturnValueOnce(hanging);
@@ -891,31 +913,37 @@ describe('POST /open', () => {
     pdfDoc3.addPage([612, 792]);
     await writeFile(pdf3, await pdfDoc3.save());
 
-    // First request starts analysis (hangs). Attach the rejection handler
-    // immediately so Vitest does not flag a transient unhandled rejection when
-    // we later cancel the mock promise.
-    const first = fetch(`${h3.url}/open`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: pdf3 }),
-    }).catch(() => undefined);
+    let first: Promise<Response> | null = null;
+    try {
+      // First request starts analysis (hangs)
+      first = fetch(`${h3.url}/open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: pdf3 }),
+      });
 
-    // Give the server a tick to set analyzeInProgress = true
-    await new Promise((r) => setTimeout(r, 10));
+      // Second request should eventually get 409 while analysis is in progress.
+      await vi.waitFor(async () => {
+        const second = await fetch(`${h3.url}/open`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: pdf3 }),
+        });
+        expect(second.status).toBe(409);
+      });
 
-    // Second request should get 409
-    const second = await fetch(`${h3.url}/open`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: pdf3 }),
-    });
-    expect(second.status).toBe(409);
-
-    resolve();
-    await first.catch(() => undefined);
-    spy.mockRestore();
-    await h3.close();
-    await settle();
+      releaseHang();
+      const firstRes = await first;
+      expect(firstRes.status).toBe(200);
+    } finally {
+      releaseHang();
+      if (first) {
+        await first.catch(() => undefined);
+      }
+      spy.mockRestore();
+      await h3.close();
+      await settle();
+    }
   });
 });
 

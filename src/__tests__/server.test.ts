@@ -475,7 +475,11 @@ describe('startServer', () => {
           const msg = JSON.parse(Buffer.from(data as Buffer).toString('utf-8')) as {
             type: string;
           };
-          // Only the 'saved' ack should arrive, not a 'docReload'
+          // Ignore unrelated events (for example, a stale in-flight docReload
+          // from the previous test) and wait specifically for the save ack.
+          if (msg.type !== 'saved') {
+            return;
+          }
           ws.close();
           resolve(msg.type);
         });

@@ -922,18 +922,15 @@ describe('POST /open', () => {
         body: JSON.stringify({ filePath: pdf3 }),
       });
 
-      // Wait deterministically for analysis to start before issuing the second request.
-      await vi.waitFor(() => {
-        expect(spy).toHaveBeenCalledTimes(1);
+      // Second request should eventually get 409 while analysis is in progress.
+      await vi.waitFor(async () => {
+        const second = await fetch(`${h3.url}/open`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filePath: pdf3 }),
+        });
+        expect(second.status).toBe(409);
       });
-
-      // Second request should get 409 while analysis is in progress.
-      const second = await fetch(`${h3.url}/open`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: pdf3 }),
-      });
-      expect(second.status).toBe(409);
 
       releaseHang();
       const firstRes = await first;

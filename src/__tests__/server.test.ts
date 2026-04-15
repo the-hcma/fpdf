@@ -1017,6 +1017,7 @@ describe('POST /upload', () => {
         reject(new Error('cancelled'));
       };
     });
+    void hanging.catch(() => undefined);
     const spy = vi.spyOn(analyzerModule, 'analyzePdf').mockReturnValueOnce(hanging);
 
     const h2 = await startServer({});
@@ -1041,11 +1042,13 @@ describe('POST /upload', () => {
         body,
       });
 
-    // First request starts analysis (hangs). Attach the rejection handler
-    // immediately so Vitest does not flag a transient unhandled rejection when
-    // we later cancel the mock promise.
+    // First request starts analysis (hangs). Attach the rejection handler to
+    // both the request and the mocked analysis promise so Vitest does not flag
+    // the intentional cancellation during cleanup as unhandled.
     const firstReq = makeReq().catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => {
+      expect(spy).toHaveBeenCalledTimes(1);
+    });
 
     // Second request should get 409
     const second = await makeReq();

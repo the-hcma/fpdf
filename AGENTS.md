@@ -85,9 +85,11 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - Never work directly on `main`. Always create a stack branch: `gt create -m "feat: description"`.
 - Keep each branch in the stack focused on exactly one logical change. Stacks should map 1-to-1 with milestones or sub-tasks from [PLAN.md](./PLAN.md).
 - Sync regularly: `gt sync` before starting new work; `gt restack` after upstream changes land.
-- Submit stacks with `gt submit` — do not open PRs manually via the GitHub UI.
+- Submit stacks with `gt submit --no-interactive` — do not open PRs manually via the GitHub UI.
+- After submitting, always mark PRs as ready for review: `gh pr ready <number>`. `gt submit --no-interactive` creates drafts by default.
 - To merge a PR, add the `merge-it` label: `gh pr edit <number> --add-label merge-it`. Never use `gh pr merge` directly.
 - Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
+- **All commits must be GPG-signed.** Ensure `commit.gpgsign = true` is set in git config and the signing key is uploaded to GitHub (Settings → SSH and GPG keys) so commits show as "Verified".
 - Each commit must pass `pnpm run check` (type-check + lint + format check) and `pnpm test`.
 - Keep commits focused. One logical change per commit.
 - PR descriptions must reference the relevant milestone from [PLAN.md](./PLAN.md).

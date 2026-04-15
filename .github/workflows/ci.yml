@@ -15,11 +15,7 @@ on:
 
 jobs:
   shellcheck:
-    # Skip the redundant re-run triggered when the merge queue (graphite-app[bot])
-    # force-pushes the original branch after rebasing it for the draft gtmq_ PR.
-    # The merge queue already runs CI on the gtmq_ draft PR; firing again here
-    # adds no signal and caused "CI re-ran after merge" noise on PR pages.
-    if: "github.event_name != 'pull_request' || github.event.action != 'synchronize' || github.actor != 'graphite-app[bot]'"
+    if: github.actor != 'graphite-app[bot]' || (github.event.pull_request.draft == true && !startsWith(github.head_ref, 'gtmq_merge_'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -27,7 +23,7 @@ jobs:
         run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
   ci:
-    if: "github.event_name != 'pull_request' || github.event.action != 'synchronize' || github.actor != 'graphite-app[bot]'"
+    if: github.actor != 'graphite-app[bot]' || (github.event.pull_request.draft == true && !startsWith(github.head_ref, 'gtmq_merge_'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -52,7 +48,7 @@ jobs:
 
   secret-scan:
     name: Secret Scan
-    if: "github.event_name != 'pull_request' || github.event.action != 'synchronize' || github.actor != 'graphite-app[bot]'"
+    if: github.actor != 'graphite-app[bot]' || (github.event.pull_request.draft == true && !startsWith(github.head_ref, 'gtmq_merge_'))
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

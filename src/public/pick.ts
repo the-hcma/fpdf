@@ -31,8 +31,6 @@ function initDarkToggle(): void {
 
 let currentPath = '';
 let busy = false;
-let pendingPdfFile: File | null = null;
-let pendingJsonFile: File | null = null;
 let canBrowseServerFiles = true;
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
@@ -243,30 +241,8 @@ async function openPdf(filePath: string): Promise<void> {
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 
-function showUploadConfirm(pdfFile: File): void {
-  pendingPdfFile = pdfFile;
-
-  const confirmEl = document.getElementById('upload-confirm');
-  const pdfNameEl = document.getElementById('upload-confirm-pdf');
-  const dropZone = document.getElementById('drop-zone');
-
-  if (pdfNameEl) pdfNameEl.textContent = `📄 ${pdfFile.name}`;
-  updatePendingJsonLabel();
-  if (dropZone) dropZone.hidden = true;
-  if (confirmEl) confirmEl.hidden = false;
-}
-
-function updatePendingJsonLabel(): void {
-  const jsonNameEl = document.getElementById('upload-confirm-json');
-  if (!jsonNameEl) return;
-  if (pendingJsonFile) {
-    jsonNameEl.textContent = `📎 ${pendingJsonFile.name}`;
-    jsonNameEl.hidden = false;
-  } else {
-    jsonNameEl.textContent = 'No companion JSON selected. Select both files or drag them together.';
-    jsonNameEl.hidden = false;
-  }
-}
+/** Currently-active upload XHR, used to abort on cancel. */
+let activeXhr: XMLHttpRequest | null = null;
 
 function pickCompanionJson(candidates: File[], pdfFile: File): File | null {
   const jsonFiles = candidates.filter((f) => f.name.toLowerCase().endsWith('.json'));
@@ -281,8 +257,8 @@ function pickCompanionJson(candidates: File[], pdfFile: File): File | null {
 }
 
 function cancelUpload(): void {
-  pendingPdfFile = null;
-  pendingJsonFile = null;
+  activeXhr?.abort();
+  activeXhr = null;
   resetUploadProgress();
 
   const confirmEl = document.getElementById('upload-confirm');
@@ -297,6 +273,7 @@ function cancelUpload(): void {
 function uploadWithProgress(formData: FormData): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    activeXhr = xhr;
     xhr.open('POST', '/upload');
 
     xhr.upload.addEventListener('progress', (event) => {
@@ -308,6 +285,7 @@ function uploadWithProgress(formData: FormData): Promise<void> {
     });
 
     xhr.addEventListener('load', () => {
+      activeXhr = null;
       if (xhr.status >= 200 && xhr.status < 300) {
         setUploadProgress(1, 1);
         resolve();
@@ -332,32 +310,38 @@ function uploadWithProgress(formData: FormData): Promise<void> {
     });
 
     xhr.addEventListener('error', () => {
+      activeXhr = null;
       reject(new Error('Network error while uploading'));
+    });
+
+    xhr.addEventListener('abort', () => {
+      activeXhr = null;
+      reject(new Error('Upload cancelled'));
     });
 
     xhr.send(formData);
   });
 }
 
-async function executeUpload(): Promise<void> {
-  if (!pendingPdfFile || busy) return;
+async function executeUpload(pdfFile: File, jsonFile: File | null): Promise<void> {
+  if (busy) return;
   busy = true;
   hideError();
 
+  // Show upload UI: filename + progress bar + cancel button; hide drop zone.
+  const pdfNameEl = document.getElementById('upload-confirm-pdf');
   const confirmEl = document.getElementById('upload-confirm');
   const dropZone = document.getElementById('drop-zone');
-  if (confirmEl) confirmEl.hidden = true;
-  if (dropZone) dropZone.hidden = false;
+  if (pdfNameEl) pdfNameEl.textContent = `📄 ${pdfFile.name}`;
+  if (confirmEl) confirmEl.hidden = false;
+  if (dropZone) dropZone.hidden = true;
 
   setStatus('Uploading…');
   resetUploadProgress();
 
   const formData = new FormData();
-  formData.append('pdf', pendingPdfFile);
-  if (pendingJsonFile) formData.append('json', pendingJsonFile);
-
-  pendingPdfFile = null;
-  pendingJsonFile = null;
+  formData.append('pdf', pdfFile);
+  if (jsonFile) formData.append('json', jsonFile);
 
   try {
     await uploadWithProgress(formData);
@@ -370,15 +354,18 @@ async function executeUpload(): Promise<void> {
     busy = false;
     setStatus('');
     resetUploadProgress();
+    if (confirmEl) confirmEl.hidden = true;
     if (dropZone) dropZone.hidden = false;
-    showError(err instanceof Error ? err.message : String(err));
+    // 'Upload cancelled' is user-initiated — don't show an error banner.
+    if (err instanceof Error && err.message !== 'Upload cancelled') {
+      showError(err.message);
+    }
   }
 }
 
 function initUpload(): void {
   const uploadBtn = document.getElementById('upload-btn');
   const pdfInput = document.getElementById('pdf-input') as HTMLInputElement | null;
-  const goBtn = document.getElementById('upload-go-btn');
   const cancelBtn = document.getElementById('upload-cancel-btn');
   const dropZone = document.getElementById('drop-zone');
 
@@ -393,12 +380,8 @@ function initUpload(): void {
       showError('Please choose a PDF file.');
       return;
     }
-    pendingJsonFile = pickCompanionJson(files, pdfFile);
-    showUploadConfirm(pdfFile);
-  });
-
-  goBtn?.addEventListener('click', () => {
-    void executeUpload();
+    const jsonFile = pickCompanionJson(files, pdfFile);
+    void executeUpload(pdfFile, jsonFile);
   });
 
   cancelBtn?.addEventListener('click', cancelUpload);
@@ -424,8 +407,8 @@ function initUpload(): void {
       return;
     }
 
-    pendingJsonFile = pickCompanionJson(files, pdfFile);
-    showUploadConfirm(pdfFile);
+    const jsonFile = pickCompanionJson(files, pdfFile);
+    void executeUpload(pdfFile, jsonFile);
   });
 }
 

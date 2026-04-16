@@ -571,6 +571,13 @@ function createCandidateWidgets(
   }
 
   for (const [groupKey, buttons] of radioGroups) {
+    // For finalized (readOnly) exports, skip radio groups where no option was selected —
+    // they have no visible content and would only add invisible interactive annotations.
+    const hasSelection = buttons.some(
+      ({ candidate: c }) => typeof c.value === 'string' && c.value === c.radioValue,
+    );
+    if (readOnly && !hasSelection) continue;
+
     const name = uniqueFieldName(groupKey, usedNames);
     const rg = form.createRadioGroup(name);
     let selectedOption: string | undefined;
@@ -603,6 +610,13 @@ function createCandidateWidgets(
     const pageH = docPage.heightPt;
     for (const c of docPage.candidateFields) {
       if (c.dismissed || c.type === 'radio') continue;
+      // For finalized (readOnly) exports, skip fields with no user-entered content.
+      // Auto-detected candidates (e.g. table-line detections) with no value would
+      // otherwise produce invisible or accidentally-filled widgets in the output.
+      if (readOnly) {
+        if (c.type === 'checkbox' && c.value !== true) continue;
+        if ((c.type === 'text' || c.type === 'textarea') && !c.value) continue;
+      }
       const name = uniqueFieldName(c.displayName || c.label || 'Field', usedNames);
       const { x, y, width, height } = c.placement;
       const rawRect = toRawRect(x, y, width, height, pageW, pageH, pageRotation);
@@ -674,6 +688,23 @@ function toRawRect(
   pageH: number,
   rotation: number,
 ): { x: number; y: number; width: number; height: number } {
+  // pageW/pageH are the VISUAL page dimensions (widthPt/heightPt from FpdfDocument).
+  // Widget placements are stored in that same visual space.  Convert them back to
+  // raw PDF MediaBox space (which is what pdf-lib expects) based on page rotation.
+  if (rotation === 90) {
+    // /Rotate 90 CW: visual width = MediaBox height, visual height = MediaBox width
+    //   MediaBox x = visual_pageH − vy − vh
+    //   MediaBox y = vx
+    //   width/height swap
+    return { x: pageH - vy - vh, y: vx, width: vh, height: vw };
+  }
+  if (rotation === 270) {
+    // /Rotate 270 CW (= 90 CCW): visual width = MediaBox height, visual height = MediaBox width
+    //   MediaBox x = vy
+    //   MediaBox y = visual_pageW − vx − vw
+    //   width/height swap
+    return { x: vy, y: pageW - vx - vw, width: vh, height: vw };
+  }
   if (rotation === 180) {
     return { x: pageW - vx - vw, y: pageH - vy - vh, width: vw, height: vh };
   }
@@ -977,6 +1008,7 @@ export interface RenderedPage {
 export async function exportFromImages(
   pages: RenderedPage[],
   doc: FpdfDocument,
+  readOnly = false,
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create();
 
@@ -998,7 +1030,7 @@ export async function exportFromImages(
     }
   }
 
-  createCandidateWidgets(pdfDoc, doc, fontCache, false);
+  createCandidateWidgets(pdfDoc, doc, fontCache, readOnly);
 
   return pdfDoc.save();
 }

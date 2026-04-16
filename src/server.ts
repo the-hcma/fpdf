@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { homedir, networkInterfaces, tmpdir } from 'node:os';
 import { watch } from 'node:fs';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Busboy from 'busboy';
@@ -17,6 +17,18 @@ import type {
   FpdfDocument,
   UiCapabilitiesResponse,
 } from './types.js';
+
+/**
+ * Write `content` to `dest` atomically by first writing to `dest.tmp` and
+ * then renaming into place.  POSIX `rename(2)` is a single syscall, so the
+ * `fs.watch` listener can never observe a partial file — it only fires on the
+ * rename event, at which point the destination is already complete.
+ */
+async function writeJsonAtomic(dest: string, content: string): Promise<void> {
+  const tmp = `${dest}.tmp`;
+  await writeFile(tmp, content, 'utf-8');
+  await rename(tmp, dest);
+}
 
 export interface ServerOptions {
   /** Absolute path to the PDF file being served. Omit to start in picker mode. */
@@ -261,7 +273,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     const run = async (): Promise<void> => {
       const ctx = requireDoc(res);
       if (ctx === null) return;
-      const body = _req.body as { pages?: { jpeg: string; widthPt: number; heightPt: number }[] };
+      const body = _req.body as {
+        pages?: { jpeg: string; widthPt: number; heightPt: number }[];
+        doc?: unknown;
+      };
       if (!Array.isArray(body.pages) || body.pages.length === 0) {
         res.status(400).json({ error: 'Missing pages array' });
         return;
@@ -271,10 +286,15 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         widthPt: p.widthPt,
         heightPt: p.heightPt,
       }));
-      const filled = await exportFromImages(pages, ctx.doc);
+      // Prefer the browser's live in-memory doc (includes user-created fields
+      // not yet saved via WebSocket) over the server's potentially stale liveDoc.
+      const docForExport =
+        typeof body.doc === 'object' && body.doc !== null ? (body.doc as FpdfDocument) : ctx.doc;
+      // Export PDF: finalized read-only output — fields have no interactive editing.
+      const filled = await exportFromImages(pages, docForExport, true);
       const stem = path.basename(
-        ctx.doc.metadata.pdfFilename,
-        path.extname(ctx.doc.metadata.pdfFilename),
+        docForExport.metadata.pdfFilename,
+        path.extname(docForExport.metadata.pdfFilename),
       );
       const filename = `${stem}-filled.pdf`;
       const disposition = isUploadSession ? 'attachment' : 'inline';
@@ -301,7 +321,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       liveDoc = result.newDoc;
       const content = JSON.stringify(liveDoc, null, 2);
       lastServerWriteContent = content;
-      await writeFile(currentJsonPath, content, 'utf-8');
+      await writeJsonAtomic(currentJsonPath, content);
       resetJsonWatcher(path.dirname(currentJsonPath));
       broadcast(JSON.stringify({ type: 'pdfRegenerated', doc: liveDoc }));
       res.json({ ok: true });
@@ -392,7 +412,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
           doc = await analyzePdf(safePath);
           const content = JSON.stringify(doc, null, 2);
           lastServerWriteContent = content;
-          await writeFile(jsonPath, content, 'utf-8');
+          await writeJsonAtomic(jsonPath, content);
         }
 
         currentPdfPath = safePath;
@@ -432,8 +452,6 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
           `Upload started from ${req.socket.remoteAddress ?? 'unknown'} (session ${sessionId})`,
         );
 
-        // Clean up any previous upload temp dir, then recreate for this upload.
-        await cleanupTempDir();
         const tempDir = path.join(tmpdir(), `fpdf-${sessionId}`);
         await mkdir(tempDir, { recursive: true });
 
@@ -536,10 +554,9 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
         const content = JSON.stringify(doc, null, 2);
         lastServerWriteContent = content;
-        await writeFile(tempJsonPath, content, 'utf-8');
+        await writeJsonAtomic(tempJsonPath, content);
 
-        // sessionTempDir is always set to tempDir after the first upload, so only
-        // cleanupTempDir() (called above) is needed; just assign the new path.
+        // Record the session temp dir so close() can clean it up on shutdown.
         sessionTempDir = tempDir;
         currentPdfPath = tempPdfPath;
         currentJsonPath = tempJsonPath;
@@ -578,21 +595,19 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   // --- Reset: return to picker mode ---
   app.post('/reset', (_req, res) => {
-    const run = async (): Promise<void> => {
+    try {
       liveDoc = null;
       currentPdfPath = null;
       currentJsonPath = null;
       isUploadSession = false;
       jsonWatcher?.close();
       jsonWatcher = null;
-      await cleanupTempDir();
       broadcast(JSON.stringify({ type: 'pickerMode' }));
       res.json({ ok: true });
-    };
-    run().catch((err: unknown) => {
+    } catch (err: unknown) {
       logger.error(`/reset failed: ${err instanceof Error ? err.message : String(err)}`);
       res.status(500).json({ error: String(err) });
-    });
+    }
   });
 
   // --- Static UI assets ---
@@ -701,7 +716,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
         liveDoc = msg.doc as FpdfDocument;
         lastServerWriteContent = JSON.stringify(liveDoc, null, 2);
-        await writeFile(activeJsonPath, lastServerWriteContent, 'utf-8');
+        await writeJsonAtomic(activeJsonPath, lastServerWriteContent);
         ws.send(
           JSON.stringify({
             type: 'saved',
@@ -720,6 +735,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     ws.on('close', () => {
       logger.debug('WebSocket client disconnected');
       scheduleIdleShutdown();
+      // Upload session temp dirs are NOT cleaned up on disconnect — session
+      // state survives reconnects (page reload, network hiccup). The only
+      // cleanup is on server shutdown via close(), which is the sole
+      // unambiguous signal that no client will ever return.
     });
   });
 
@@ -814,25 +833,38 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   const close = (): Promise<void> =>
     new Promise((resolve, reject) => {
-      jsonWatcher?.close();
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      httpServer.closeAllConnections();
-      wss.close(() => {
-        httpServer.close((httpErr) => {
-          cleanupTempDir()
-            .catch((e: unknown) => {
-              logger.error(
-                `Temp dir cleanup failed: ${e instanceof Error ? e.message : String(e)}`,
-              );
-            })
-            .finally(() => {
-              if (httpErr) reject(httpErr);
-              else resolve();
-            });
+      // Wait for the FSWatcher to finish closing before tearing down the HTTP
+      // server.  On macOS, kqueue FD cleanup can lag behind the synchronous
+      // close() call; waiting for the 'close' event eliminates EMFILE errors
+      // when tests open many servers in quick succession.
+      const doClose = (): void => {
+        for (const client of wss.clients) {
+          client.terminate();
+        }
+        httpServer.closeAllConnections();
+        wss.close(() => {
+          httpServer.close((httpErr) => {
+            cleanupTempDir()
+              .catch((e: unknown) => {
+                logger.error(
+                  `Temp dir cleanup failed: ${e instanceof Error ? e.message : String(e)}`,
+                );
+              })
+              .finally(() => {
+                if (httpErr) reject(httpErr);
+                else resolve();
+              });
+          });
         });
-      });
+      };
+
+      if (jsonWatcher === null) {
+        doClose();
+      } else {
+        jsonWatcher.once('close', doClose);
+        jsonWatcher.close();
+        jsonWatcher = null;
+      }
     });
 
   return { url, networkUrls, close };

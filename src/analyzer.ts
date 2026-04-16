@@ -1698,11 +1698,49 @@ export function suppressContainerCandidates(
 }
 
 /**
- * Analyze a PDF file and extract all AcroForm fields into an FpdfDocument.
+ * Convert a CandidateField's placement from the PDF's raw MediaBox coordinate
+ * space to the visual (post-rotation) space used by the UI.
  *
- * @param filePath Absolute or relative path to the PDF file.
- * @returns A fully populated FpdfDocument ready to serialize as .fpdf.json.
- * @throws {AnalyzerError} If the file cannot be read or is not a valid PDF.
+ * The pdfjs content-stream operators and detectCandidateFields run in the
+ * unrotated MediaBox space.  Since widthPt/heightPt are stored as visual
+ * dimensions, candidate placements must be mapped to the same visual space
+ * before they are persisted.
+ *
+ * For rotation=0 and rotation=180 the visual and MediaBox spaces coincide
+ * (dimensions don't swap), so no spatial transform is needed.
+ */
+export function convertCandidateToVisual(
+  candidate: CandidateField,
+  rotationDeg: 90 | 270,
+  mboxWidth: number,
+  mboxHeight: number,
+): CandidateField {
+  const { x: px, y: py, width: pw, height: ph } = candidate.placement;
+  let vx: number, vy: number, vw: number, vh: number;
+  if (rotationDeg === 90) {
+    // /Rotate 90 CW: visual width = mboxHeight, visual height = mboxWidth
+    //   visual x = mediaBox y
+    //   visual y (from bottom) = mboxWidth − mediaBox x − mediaBox width
+    //   width/height swap
+    vx = py;
+    vy = mboxWidth - px - pw;
+    vw = ph;
+    vh = pw;
+  } else {
+    // /Rotate 270 CW (= 90 CCW): visual width = mboxHeight, visual height = mboxWidth
+    //   visual x = mboxHeight − mediaBox y − mediaBox height
+    //   visual y (from bottom) = mediaBox x
+    //   width/height swap
+    vx = mboxHeight - py - ph;
+    vy = px;
+    vw = ph;
+    vh = pw;
+  }
+  return { ...candidate, placement: { x: vx, y: vy, width: vw, height: vh } };
+}
+
+/**
+ * Analyze a PDF file and extract all AcroForm fields into an FpdfDocument.
  */
 export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
   const absPath = path.resolve(filePath);
@@ -1872,14 +1910,37 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
   const pages: PdfPage[] = [];
   for (let p = 1; p <= pageCount; p++) {
     // Page dimensions: prefer pdf-lib (exact PDF MediaBox), fall back to pdfjs-dist viewport.
+    // Always store VISUAL dimensions (after applying the page /Rotate), so that the UI
+    // coordinate system matches 1-to-1 with the rendered page.  The exporter converts
+    // visual coordinates back to the raw MediaBox space when writing widget annotations.
     let width: number;
     let height: number;
+    let rotationDeg: 0 | 90 | 180 | 270 = 0;
+    // Keep the raw MediaBox dimensions for vector-analysis that runs in unrotated space.
+    let mboxWidth: number;
+    let mboxHeight: number;
     if (pdfDoc !== null) {
-      ({ width, height } = pdfDoc.getPage(p - 1).getSize());
+      const pdfPage = pdfDoc.getPage(p - 1);
+      ({ width: mboxWidth, height: mboxHeight } = pdfPage.getSize());
+      const rot = pdfPage.getRotation().angle;
+      if (rot === 90 || rot === 180 || rot === 270) rotationDeg = rot;
+      // Swap dimensions for 90° / 270° so the stored widthPt/heightPt describe
+      // the page as rendered (landscape ↔ portrait).
+      if (rotationDeg === 90 || rotationDeg === 270) {
+        width = mboxHeight;
+        height = mboxWidth;
+      } else {
+        width = mboxWidth;
+        height = mboxHeight;
+      }
     } else if (pdfjsDoc !== null) {
+      // pdfjs.getViewport() already accounts for rotation, so the returned
+      // width/height are the visual dimensions.
       const vp = (await pdfjsDoc.getPage(p)).getViewport({ scale: 1 });
       width = vp.width;
       height = vp.height;
+      mboxWidth = width;
+      mboxHeight = height;
     } else {
       throw new Error('unreachable: both parsers null');
     }
@@ -1897,12 +1958,21 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
         pageType = detectPageType(ops.fnArray, pageHasAcroFields);
         textBlocks = await extractTextBlocks(pdfjsPage);
         if (pageType !== 'acroform' && pageType !== 'raster') {
+          // detectCandidateFields operates in the raw MediaBox (unrotated) coordinate
+          // space, matching the pdfjs content-stream operator list.
           candidateFields = detectCandidateFields(
             { fnArray: ops.fnArray, argsArray: ops.argsArray as unknown[][] },
             textBlocks,
-            width,
+            mboxWidth,
           );
           suppressContainerCandidates(candidateFields, pageFields.get(p) ?? []);
+          // Convert candidate placements from MediaBox space to visual space so
+          // they align with the rendered page in the UI.
+          if (rotationDeg === 90 || rotationDeg === 270) {
+            candidateFields = candidateFields.map((c) =>
+              convertCandidateToVisual(c, rotationDeg, mboxWidth, mboxHeight),
+            );
+          }
         }
       } catch (err) {
         // best-effort — leave pageType/textBlocks/candidateFields at defaults
@@ -1914,6 +1984,7 @@ export async function analyzePdf(filePath: string): Promise<FpdfDocument> {
       pageNumber: p,
       widthPt: width,
       heightPt: height,
+      rotationDeg,
       pageType,
       fields: pageFields.get(p) ?? [],
       candidateFields,

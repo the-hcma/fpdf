@@ -138,7 +138,7 @@ describe('exportFromImages', () => {
     expect(form.getFields()).toHaveLength(0);
   });
 
-  it('creates a widget even for empty string values (field is present but blank)', async () => {
+  it('creates a widget even for empty string values when readOnly is false', async () => {
     const candidate = makeCandidate({ value: '', displayName: 'Empty Field' });
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
     const bytes = await exportFromImages(pages, makeDoc([candidate]));
@@ -154,5 +154,62 @@ describe('exportFromImages', () => {
     const result = await PDFDocument.load(bytes);
     const tf = result.getForm().getFields()[0] as PDFTextField;
     expect(tf.isReadOnly()).toBe(false);
+  });
+});
+
+describe('exportFromImages — readOnly=true (finalized export)', () => {
+  it('skips an empty text candidate so auto-detected fields do not appear in the output', async () => {
+    const candidate = makeCandidate({ value: '', displayName: 'AutoDetected' });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]), true);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getForm().getFields()).toHaveLength(0);
+  });
+
+  it('includes a text candidate that has a non-empty value', async () => {
+    const candidate = makeCandidate({ value: 'Alice', displayName: 'Name' });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]), true);
+    const result = await PDFDocument.load(bytes);
+    const fields = result.getForm().getFields();
+    expect(fields).toHaveLength(1);
+    expect((fields[0] as PDFTextField).getText()).toBe('Alice');
+  });
+
+  it('skips an unchecked checkbox candidate', async () => {
+    const candidate = makeCandidate({
+      type: 'checkbox',
+      value: false,
+      displayName: 'Agree',
+      placement: { x: 50, y: 700, width: 14, height: 14 },
+    });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]), true);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getForm().getFields()).toHaveLength(0);
+  });
+
+  it('includes a checked checkbox candidate', async () => {
+    const candidate = makeCandidate({
+      type: 'checkbox',
+      value: true,
+      displayName: 'Agree',
+      placement: { x: 50, y: 700, width: 14, height: 14 },
+    });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]), true);
+    const result = await PDFDocument.load(bytes);
+    const fields = result.getForm().getFields();
+    expect(fields).toHaveLength(1);
+    expect((fields[0] as PDFCheckBox).isChecked()).toBe(true);
+  });
+
+  it('marks the exported text field as read-only', async () => {
+    const candidate = makeCandidate({ value: 'Bob', displayName: 'Name' });
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, makeDoc([candidate]), true);
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getFields()[0] as PDFTextField;
+    expect(tf.isReadOnly()).toBe(true);
   });
 });

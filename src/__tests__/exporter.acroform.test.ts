@@ -1,6 +1,6 @@
 // integration
 import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { exportPdf, ExportError } from '../exporter.js';
 import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
 import { makePdfBytes, writeTempPdf } from './helpers.js';
@@ -60,6 +60,9 @@ let narrowTextPdfPath: string;
 let checkboxPdfPath: string;
 let dropdownPdfPath: string;
 let radioPdfPath: string;
+let rotated90PdfPath: string;
+let rotated180PdfPath: string;
+let rotated270PdfPath: string;
 
 beforeAll(async () => {
   const textBytes = await makePdfBytes((doc) => {
@@ -104,6 +107,27 @@ beforeAll(async () => {
     rg.addOptionToPage('large', page, { x: 50, y: 680, width: 15, height: 15 });
   });
   radioPdfPath = await writeTempPdf('radio.pdf', radioBytes, 'fpdf-exporter-tests');
+
+  // A 595×842 portrait PDF with /Rotate 90, so viewers display it as 842×595 landscape.
+  const rotated90Bytes = await makePdfBytes((doc) => {
+    const page = doc.addPage([595, 842]);
+    page.setRotation(degrees(90));
+  });
+  rotated90PdfPath = await writeTempPdf('rotated90.pdf', rotated90Bytes, 'fpdf-exporter-tests');
+
+  // /Rotate 180 — same MediaBox size but upside-down; viewers show 612×792.
+  const rotated180Bytes = await makePdfBytes((doc) => {
+    const page = doc.addPage([612, 792]);
+    page.setRotation(degrees(180));
+  });
+  rotated180PdfPath = await writeTempPdf('rotated180.pdf', rotated180Bytes, 'fpdf-exporter-tests');
+
+  // /Rotate 270 (= 90 counter-clockwise) — MediaBox 595×842, visual 842×595.
+  const rotated270Bytes = await makePdfBytes((doc) => {
+    const page = doc.addPage([595, 842]);
+    page.setRotation(degrees(270));
+  });
+  rotated270PdfPath = await writeTempPdf('rotated270.pdf', rotated270Bytes, 'fpdf-exporter-tests');
 });
 
 // ---------------------------------------------------------------------------
@@ -309,5 +333,200 @@ describe('encrypted PDF export', () => {
     const doc = makeDoc([]);
     doc.metadata.originalPdf = textPdfPath;
     await expect(exportPdf(textPdfPath, doc)).rejects.toThrow(/Print function/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Candidate-field placement on a /Rotate 90 page
+// ---------------------------------------------------------------------------
+//
+// Placement coordinates are stored in the VISUAL (post-rotation) space.
+// The exporter must convert them back to the PDF MediaBox space.
+//
+// For a 595×842 /Rotate 90 page (visual: 842 wide × 595 tall):
+//   toRawRect(vx, vy, vw, vh, pageW=842, pageH=595, rotation=90)
+//     → { x: 595−vy−vh, y: vx, width: vh, height: vw }
+//
+// Visually: field at (vx=100, vy=50, vw=120, vh=20)
+//   → MediaBox: x=525, y=100, width=20, height=120
+
+describe('candidate field on a /Rotate 90 page', () => {
+  function makeRotatedDoc(candidateFields: CandidateField[]): Parameters<typeof exportPdf>[1] {
+    return {
+      metadata: {
+        version: '1.0',
+        originalPdf: rotated90PdfPath,
+        pdfFilename: 'rotated90.pdf',
+        pdfHash: 'sha256:test',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 842, // visual landscape width (after /Rotate 90)
+          heightPt: 595, // visual landscape height
+          rotationDeg: 90,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields,
+          textBlocks: [],
+        },
+      ],
+    };
+  }
+
+  it('places a text candidate at the correct MediaBox position for /Rotate 90', async () => {
+    // Visual field at (vx=100, vy=50, vw=120, vh=20) on a 842×595 landscape page.
+    // Expected MediaBox rect: x=595−50−20=525, y=100, width=20, height=120
+    const candidate: CandidateField = {
+      id: 'rot-test',
+      type: 'text',
+      label: 'Name',
+      displayName: 'Name',
+      placement: { x: 100, y: 50, width: 120, height: 20 },
+      value: 'Hello',
+      confidence: 'high',
+      dismissed: false,
+    };
+    const bytes = await exportPdf(rotated90PdfPath, makeRotatedDoc([candidate]));
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getTextField('Name');
+    const widget = tf.acroField.getWidgets()[0];
+    if (!widget) throw new Error('no widget found');
+    const rect = widget.getRectangle();
+    // pdf-lib may adjust widget bounds by up to ±1pt; verify the transform landed
+    // in the correct zone (within 1.5pt of the theoretical MediaBox position).
+    // Expected: x=595−vy(50)−vh(20)=525, y=vx(100)=100, w=vh(20)=20, h=vw(120)=120
+    expect(Math.abs(rect.x - 525)).toBeLessThan(1.5);
+    expect(Math.abs(rect.y - 100)).toBeLessThan(1.5);
+    expect(Math.abs(rect.width - 20)).toBeLessThan(1.5);
+    expect(Math.abs(rect.height - 120)).toBeLessThan(1.5);
+  });
+
+  it('carries the field value correctly through the rotation transform', async () => {
+    const candidate: CandidateField = {
+      id: 'rot-val',
+      type: 'text',
+      label: 'Note',
+      displayName: 'Note',
+      placement: { x: 200, y: 100, width: 150, height: 25 },
+      value: 'test value',
+      confidence: 'high',
+      dismissed: false,
+    };
+    const bytes = await exportPdf(rotated90PdfPath, makeRotatedDoc([candidate]));
+    const result = await PDFDocument.load(bytes);
+    expect(result.getForm().getTextField('Note').getText()).toBe('test value');
+  });
+});
+
+describe('candidate field on a /Rotate 270 page', () => {
+  // MediaBox 595×842, /Rotate 270, visual 842×595.
+  // toRawRect(vx, vy, vw, vh, pageW=842, pageH=595, rotation=270)
+  //   → { x: vy, y: pageW − vx − vw, width: vh, height: vw }
+  // For visual field (100, 50, 120, 20): x=50, y=842−100−120=622, w=20, h=120
+  it('places a text candidate at the correct MediaBox position for /Rotate 270', async () => {
+    const candidate: CandidateField = {
+      id: 'rot270',
+      type: 'text',
+      label: 'Name',
+      displayName: 'Name',
+      placement: { x: 100, y: 50, width: 120, height: 20 },
+      value: 'Hello',
+      confidence: 'high',
+      dismissed: false,
+    };
+    const doc: Parameters<typeof exportPdf>[1] = {
+      metadata: {
+        version: '1.0',
+        originalPdf: rotated270PdfPath,
+        pdfFilename: 'rotated270.pdf',
+        pdfHash: 'sha256:test',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 842,
+          heightPt: 595,
+          rotationDeg: 270,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+    const bytes = await exportPdf(rotated270PdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getTextField('Name');
+    const widget = tf.acroField.getWidgets()[0];
+    if (!widget) throw new Error('no widget found');
+    const rect = widget.getRectangle();
+    // Expected: x=vy(50), y=pagW(842)−vx(100)−vw(120)=622, w=vh(20), h=vw(120)
+    expect(Math.abs(rect.x - 50)).toBeLessThan(1.5);
+    expect(Math.abs(rect.y - 622)).toBeLessThan(1.5);
+    expect(Math.abs(rect.width - 20)).toBeLessThan(1.5);
+    expect(Math.abs(rect.height - 120)).toBeLessThan(1.5);
+  });
+});
+
+describe('candidate field on a /Rotate 180 page', () => {
+  // MediaBox 612×792, /Rotate 180, visual 612×792 (dimensions unchanged, flipped).
+  // toRawRect(vx, vy, vw, vh, pageW=612, pageH=792, rotation=180)
+  //   → { x: pageW − vx − vw, y: pageH − vy − vh, width: vw, height: vh }
+  // For visual field (100, 50, 120, 20): x=392, y=722, w=120, h=20
+  it('places a text candidate at the correct MediaBox position for /Rotate 180', async () => {
+    const candidate: CandidateField = {
+      id: 'rot180',
+      type: 'text',
+      label: 'Name',
+      displayName: 'Name',
+      placement: { x: 100, y: 50, width: 120, height: 20 },
+      value: 'Hello',
+      confidence: 'high',
+      dismissed: false,
+    };
+    const doc: Parameters<typeof exportPdf>[1] = {
+      metadata: {
+        version: '1.0',
+        originalPdf: rotated180PdfPath,
+        pdfFilename: 'rotated180.pdf',
+        pdfHash: 'sha256:test',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          rotationDeg: 180,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [candidate],
+          textBlocks: [],
+        },
+      ],
+    };
+    const bytes = await exportPdf(rotated180PdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getTextField('Name');
+    const widget = tf.acroField.getWidgets()[0];
+    if (!widget) throw new Error('no widget found');
+    const rect = widget.getRectangle();
+    // Expected: x=612−100−120=392, y=792−50−20=722, w=120, h=20
+    expect(Math.abs(rect.x - 392)).toBeLessThan(1.5);
+    expect(Math.abs(rect.y - 722)).toBeLessThan(1.5);
+    expect(Math.abs(rect.width - 120)).toBeLessThan(1.5);
+    expect(Math.abs(rect.height - 20)).toBeLessThan(1.5);
   });
 });

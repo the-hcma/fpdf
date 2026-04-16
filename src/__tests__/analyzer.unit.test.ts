@@ -13,6 +13,7 @@ import {
   parseXfaDatasetValues,
   patchXfaDatasetsXml,
   computePdfKind,
+  convertCandidateToVisual,
 } from '../analyzer.js';
 import { makePlacement, makeCandidate } from './helpers.js';
 
@@ -790,5 +791,65 @@ describe('suppressContainerCandidates', () => {
     const inner = makeCandidate('checkbox', 0, 0, 30, 12); // 6/30 = 20% overlap
     suppressContainerCandidates([outer, inner], []);
     expect(outer.confidence).toBe('high');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// convertCandidateToVisual
+// ---------------------------------------------------------------------------
+
+describe('convertCandidateToVisual', () => {
+  // Reference page: 595×842 MediaBox (portrait), /Rotate 90 → visual 842×595 landscape.
+  const MBOX_W = 595;
+  const MBOX_H = 842;
+
+  function c(x: number, y: number, w: number, h: number) {
+    return makeCandidate('text', x, y, w, h);
+  }
+
+  describe('rotation=90', () => {
+    it('maps a full-page MediaBox rect to a full-page visual rect', () => {
+      const result = convertCandidateToVisual(c(0, 0, MBOX_W, MBOX_H), 90, MBOX_W, MBOX_H);
+      expect(result.placement).toEqual({ x: 0, y: 0, width: MBOX_H, height: MBOX_W });
+    });
+
+    it('maps a small MediaBox rect to the correct visual landscape position', () => {
+      // MediaBox (133, 473, 34, 27): a cell in the portrait table.
+      // Expected visual: vx=473, vy=595−133−34=428, vw=27, vh=34
+      const result = convertCandidateToVisual(c(133, 473, 34, 27), 90, MBOX_W, MBOX_H);
+      expect(result.placement).toEqual({ x: 473, y: 428, width: 27, height: 34 });
+    });
+
+    it('swaps width and height', () => {
+      const result = convertCandidateToVisual(c(0, 0, 120, 20), 90, MBOX_W, MBOX_H);
+      expect(result.placement.width).toBe(20);
+      expect(result.placement.height).toBe(120);
+    });
+
+    it('preserves all non-placement fields on the candidate', () => {
+      const original = makeCandidate('checkbox', 50, 100, 14, 14);
+      original.label = 'Agree';
+      original.dismissed = false;
+      const result = convertCandidateToVisual(original, 90, MBOX_W, MBOX_H);
+      expect(result.label).toBe('Agree');
+      expect(result.type).toBe('checkbox');
+      expect(result.dismissed).toBe(false);
+    });
+  });
+
+  describe('rotation=270', () => {
+    it('maps a full-page MediaBox rect to a full-page visual rect', () => {
+      const result = convertCandidateToVisual(c(0, 0, MBOX_W, MBOX_H), 270, MBOX_W, MBOX_H);
+      expect(result.placement).toEqual({ x: 0, y: 0, width: MBOX_H, height: MBOX_W });
+    });
+
+    it('maps a small MediaBox rect to the correct visual landscape position', () => {
+      // MediaBox (133, 473, 34, 27): /Rotate 270
+      // vx = mboxHeight − py − ph = 842 − 473 − 27 = 342
+      // vy = px = 133
+      // vw = ph = 27, vh = pw = 34
+      const result = convertCandidateToVisual(c(133, 473, 34, 27), 270, MBOX_W, MBOX_H);
+      expect(result.placement).toEqual({ x: 342, y: 133, width: 27, height: 34 });
+    });
   });
 });

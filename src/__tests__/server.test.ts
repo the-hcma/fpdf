@@ -11,6 +11,7 @@ import { WebSocket } from 'ws';
 import { PDFDocument } from 'pdf-lib';
 import { startServer, type ServerHandle } from '../server.js';
 import type { BrowseResponse, FpdfDocument, UiCapabilitiesResponse } from '../types.js';
+import { MINIMAL_JPEG } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -214,18 +215,24 @@ describe('startServer', () => {
     });
 
     it('ignores messages with a non-save type', async () => {
-      await new Promise<void>((resolve, reject) => {
+      // After the ignored ping, send a null-doc save which returns an error ack.
+      // Receiving the error ack proves: (a) the connection is still alive
+      // (the ping did not break it) and (b) both messages were processed in order.
+      const reply = await new Promise<string>((resolve, reject) => {
         const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
         ws.on('open', () => {
           ws.send(JSON.stringify({ type: 'ping' }));
-          // No reply is expected; give the server a tick then close
-          setTimeout(() => {
-            ws.close();
-            resolve();
-          }, 50);
+          ws.send(JSON.stringify({ type: 'save', doc: null }));
+        });
+        ws.on('message', (data) => {
+          ws.close();
+          resolve(Buffer.from(data as Buffer).toString('utf-8'));
         });
         ws.on('error', reject);
       });
+      const msg = JSON.parse(reply) as { type: string; message: string };
+      expect(msg.type).toBe('error');
+      expect(msg.message).toContain('doc');
     });
 
     it('saves the doc and acks when given a valid save message', async () => {
@@ -417,32 +424,33 @@ describe('startServer', () => {
         pages: [{ ...mockPage, fields: [{ ...mockField, value: 'ExternalEdit' }] }],
       };
 
-      const reloadMsg = await new Promise<{ type: string; doc: FpdfDocument }>(
-        (resolve, reject) => {
-          const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
-          ws.on('open', () => {
-            // Write the updated JSON directly to disk (external edit)
-            void writeFile(jsonPath, JSON.stringify(updatedDoc, null, 2), 'utf-8').catch(reject);
-          });
-          ws.on('message', (data) => {
-            const msg = JSON.parse(Buffer.from(data as Buffer).toString('utf-8')) as {
-              type: string;
-              doc: FpdfDocument;
-            };
-            if (msg.type === 'docReload') {
-              ws.close();
-              resolve(msg);
-            }
-          });
-          ws.on('error', reject);
-          setTimeout(() => {
-            reject(new Error('timeout waiting for docReload'));
-          }, 5000);
-        },
-      );
+      // Open the WS, write the file externally, then use vi.waitFor to wait
+      // for the docReload broadcast — no fixed-delay timeout needed.
+      let receivedReload: { type: string; doc: FpdfDocument } | null = null;
+      const ws = new WebSocket(`${baseUrl.replace('http', 'ws')}/ws`);
+      await new Promise<void>((resolve, reject) => {
+        ws.on('open', resolve);
+        ws.on('error', reject);
+      });
+      ws.on('message', (data) => {
+        const msg = JSON.parse(Buffer.from(data as Buffer).toString('utf-8')) as {
+          type: string;
+          doc: FpdfDocument;
+        };
+        if (msg.type === 'docReload') receivedReload = msg;
+      });
+      await writeFile(jsonPath, JSON.stringify(updatedDoc, null, 2), 'utf-8');
+      try {
+        await vi.waitFor(() => {
+          if (!receivedReload) throw new Error('docReload broadcast not yet received');
+        });
+      } finally {
+        ws.close();
+      }
 
-      expect(reloadMsg.type).toBe('docReload');
-      expect(reloadMsg.doc.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
+      expect(receivedReload).not.toBeNull();
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      expect(receivedReload!.doc.pages[0]?.fields[0]?.value).toBe('ExternalEdit');
 
       // GET /doc should eventually reflect the reloaded doc.
       await vi.waitFor(async () => {
@@ -525,11 +533,6 @@ describe('startServer', () => {
   });
 });
 
-// Allow the OS to reclaim file descriptors after closing a server.
-// On macOS, FSWatcher.close() is synchronous but kqueue FD cleanup can lag,
-// causing EMFILE when many servers are opened in quick succession.
-const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 50));
-
 describe('startServer error paths', () => {
   it('GET /filled-pdf returns 500 when the PDF file does not exist', async () => {
     const dir = path.join(tmpdir(), 'fpdf-server-filled-error-tests');
@@ -544,7 +547,6 @@ describe('startServer error paths', () => {
       expect(res.status).toBe(500);
     } finally {
       await h.close();
-      await settle();
     }
   });
 
@@ -556,28 +558,29 @@ describe('startServer error paths', () => {
     const pdfFile = path.join(dir, 'test.pdf');
     await writeFile(pdfFile, await pdfDoc2.save());
 
-    // jsonPath is a directory — writeFile(dir, ...) throws EISDIR
-    // so handleMessage().catch fires (server.ts line 159)
+    // jsonPath is a directory — writeJsonAtomic(dir, ...) throws EISDIR
+    // so handleMessage().catch fires; no ack is sent back to the client.
     const h = await startServer({ pdfPath: pdfFile, doc: MOCK_DOC, jsonPath: dir });
     try {
+      // Send the failing save then wait for the WS close-handshake to complete.
+      // When the client receives the server's CLOSE echo, all prior messages are
+      // guaranteed to have been processed — no fixed-delay sleep needed.
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`${h.url.replace('http', 'ws')}/ws`);
         ws.on('open', () => {
           ws.send(JSON.stringify({ type: 'save', doc: MOCK_DOC }));
-          // No ack will be sent because writeFile throws before ws.send
-          setTimeout(() => {
-            ws.close();
-            resolve();
-          }, 150);
+          ws.close();
         });
+        ws.on('close', resolve);
         ws.on('error', reject);
       });
       // Server must still be reachable after the error
-      const res = await fetch(`${h.url}/doc`);
-      expect(res.status).toBe(200);
+      await vi.waitFor(async () => {
+        const res = await fetch(`${h.url}/doc`);
+        expect(res.status).toBe(200);
+      });
     } finally {
       await h.close();
-      await settle();
     }
   });
 
@@ -594,7 +597,6 @@ describe('startServer error paths', () => {
       expect(res.status).toBe(500);
     } finally {
       await h.close();
-      await settle();
     }
   });
 
@@ -630,7 +632,6 @@ describe('startServer error paths', () => {
       });
     } finally {
       await h.close();
-      await settle();
     }
   });
 
@@ -653,7 +654,6 @@ describe('startServer error paths', () => {
       expect(res.headers.get('content-type')).toContain('text/html');
     } finally {
       await h.close();
-      await settle();
     }
   });
 
@@ -673,7 +673,6 @@ describe('startServer error paths', () => {
       expect(body.error).toBeTruthy();
     } finally {
       await h.close();
-      await settle();
     }
   });
 });
@@ -691,7 +690,6 @@ describe('picker mode (no doc on start)', () => {
 
   afterAll(async () => {
     await pickerHandle.close();
-    await settle();
   });
 
   it('starts successfully and returns a 127.0.0.1 URL', () => {
@@ -740,7 +738,6 @@ describe('GET /browse', () => {
 
   afterAll(async () => {
     await h.close();
-    await settle();
   });
 
   it('returns 200 with resolvedPath and entries for a valid directory', async () => {
@@ -809,7 +806,6 @@ describe('POST /open', () => {
 
   afterAll(async () => {
     await h.close();
-    await settle();
   });
 
   it('returns 400 when filePath is missing', async () => {
@@ -890,7 +886,6 @@ describe('POST /open', () => {
 
     ws.close();
     await h2.close();
-    await settle();
   });
 
   it('returns 409 when analysis is already in progress', async () => {
@@ -942,7 +937,6 @@ describe('POST /open', () => {
       }
       spy.mockRestore();
       await h3.close();
-      await settle();
     }
   });
 });
@@ -965,7 +959,6 @@ describe('POST /upload', () => {
 
   afterAll(async () => {
     await h.close();
-    await settle();
   });
 
   async function multipartUpload(
@@ -1058,7 +1051,6 @@ describe('POST /upload', () => {
     await firstReq.catch(() => undefined);
     spy.mockRestore();
     await h2.close();
-    await settle();
   });
 
   it('returns 400-level error when no pdf field is included', async () => {
@@ -1136,7 +1128,6 @@ describe('POST /upload', () => {
 
     ws.close();
     await h2.close();
-    await settle();
   });
 
   it('resumes from companion JSON when provided', async () => {
@@ -1220,7 +1211,6 @@ describe('POST /upload', () => {
     expect(doc.pages[0]?.fields[0]?.value).toBe('RestoredValue');
 
     await h3.close();
-    await settle();
   });
 });
 
@@ -1234,7 +1224,6 @@ describe('GET /session-json', () => {
     const res = await fetch(`${h.url}/session-json`);
     expect(res.status).toBe(503);
     await h.close();
-    await settle();
   });
 
   it('returns JSON attachment with the current doc', async () => {
@@ -1299,7 +1288,6 @@ describe('POST /save-acroform (upload session)', () => {
     expect(Buffer.from(buf).subarray(0, 4).toString()).toBe('%PDF');
 
     await h.close();
-    await settle();
   });
 });
 
@@ -1327,5 +1315,133 @@ describe('WebSocket saved ack — uploaded flag', () => {
     const ack = JSON.parse(reply) as { type: string; uploaded: boolean };
     expect(ack.type).toBe('saved');
     expect(ack.uploaded).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /export-canvas — canvas fallback export
+// ---------------------------------------------------------------------------
+
+describe('POST /export-canvas', () => {
+  // A single 1×1 white JPEG page encoded as base64, as the browser sends it.
+  const minimalJpegB64 = Buffer.from(MINIMAL_JPEG).toString('base64');
+
+  it('returns 400 when pages array is missing', async () => {
+    const res = await fetch(`${baseUrl}/export-canvas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when pages array is empty', async () => {
+    const res = await fetch(`${baseUrl}/export-canvas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pages: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns valid PDF bytes when pages are provided without a doc override', async () => {
+    const res = await fetch(`${baseUrl}/export-canvas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pages: [{ jpeg: minimalJpegB64, widthPt: 612, heightPt: 792 }],
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/pdf');
+    const buf = await res.arrayBuffer();
+    expect(Buffer.from(buf).subarray(0, 4).toString()).toBe('%PDF');
+  });
+
+  it('uses body.doc candidate fields instead of stale server doc when provided', async () => {
+    // The server's ctx.doc has no candidate fields (MOCK_DOC).  The browser
+    // sends a doc override with one candidate field containing 'Alice'.
+    // This is the regression test for the bug where user-created fields were
+    // absent from the canvas-fallback export because ctx.doc was used.
+    const docWithCandidate: FpdfDocument = {
+      ...MOCK_DOC,
+      metadata: { ...MOCK_DOC.metadata, pdfKind: 'no-acroform' },
+      pages: [
+        {
+          ...(MOCK_DOC.pages[0] ?? {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'vector' as const,
+            fields: [],
+            textBlocks: [],
+          }),
+          fields: [],
+          candidateFields: [
+            {
+              id: 'c-canvas-test',
+              type: 'text',
+              label: 'Name',
+              displayName: 'Name',
+              placement: { x: 50, y: 700, width: 200, height: 20 },
+              value: 'Alice',
+              confidence: 'high',
+              dismissed: false,
+            },
+          ],
+        },
+      ],
+    };
+
+    const res = await fetch(`${baseUrl}/export-canvas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pages: [{ jpeg: minimalJpegB64, widthPt: 612, heightPt: 792 }],
+        doc: docWithCandidate,
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const buf = await res.arrayBuffer();
+    const result = await PDFDocument.load(buf);
+    // The browser-supplied doc's candidate field should be exported as a real
+    // AcroForm widget, proving body.doc was used instead of the stale ctx.doc.
+    const fields = result.getForm().getFields();
+    expect(fields).toHaveLength(1);
+    expect(result.getForm().getTextField('Name').getText()).toBe('Alice');
+  });
+
+  it('uses the filename from body.doc.metadata when a doc override is supplied', async () => {
+    const docWithName: FpdfDocument = {
+      ...MOCK_DOC,
+      metadata: { ...MOCK_DOC.metadata, pdfFilename: 'my-scan.pdf', pdfKind: 'no-acroform' },
+      pages: [
+        {
+          ...(MOCK_DOC.pages[0] ?? {
+            pageNumber: 1,
+            widthPt: 612,
+            heightPt: 792,
+            pageType: 'vector' as const,
+            fields: [],
+            textBlocks: [],
+          }),
+          fields: [],
+          candidateFields: [],
+        },
+      ],
+    };
+
+    const res = await fetch(`${baseUrl}/export-canvas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pages: [{ jpeg: minimalJpegB64, widthPt: 612, heightPt: 792 }],
+        doc: docWithName,
+      }),
+    });
+    expect(res.status).toBe(200);
+    const disposition = res.headers.get('content-disposition') ?? '';
+    expect(disposition).toContain('my-scan-filled.pdf');
   });
 });

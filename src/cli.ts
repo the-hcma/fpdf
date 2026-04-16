@@ -545,7 +545,9 @@ export function buildProgram(): Command {
       const host = shouldListenAll ? '0.0.0.0' : undefined;
       const port = portArg !== undefined ? parseInt(portArg, 10) : undefined;
       const handle = await startServerRestarting({
-        autoShutdown: true,
+        // Picker mode (no subcommand) is a persistent service — never auto-exit
+        // when the last client disconnects, regardless of --listen-all.
+        autoShutdown: false,
         ...(host !== undefined && { host }),
         ...(port !== undefined && { port }),
       });

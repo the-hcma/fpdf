@@ -151,10 +151,23 @@ export interface TextBlock {
 
 export interface PdfPage {
   pageNumber: number;
-  /** Page width in PDF points. */
+  /**
+   * Visual page width in PDF points (after applying /Rotate).
+   * For a 90° or 270° rotated portrait page, this is the landscape width.
+   */
   widthPt: number;
-  /** Page height in PDF points. */
+  /**
+   * Visual page height in PDF points (after applying /Rotate).
+   * For a 90° or 270° rotated portrait page, this is the landscape height.
+   */
   heightPt: number;
+  /**
+   * Page rotation in degrees clockwise (the PDF /Rotate value).
+   * Placement coordinates in this page are in the visual (post-rotation) space.
+   * The exporter converts them back to the PDF MediaBox space when writing widgets.
+   * Absent in documents saved before this field was introduced; treated as 0.
+   */
+  rotationDeg?: 0 | 90 | 180 | 270;
   /**
    * Classification based on the pdfjs-dist operator list.
    * Drives which extractors ran and what the UI can offer.

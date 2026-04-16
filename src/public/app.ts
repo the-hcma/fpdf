@@ -1123,10 +1123,6 @@ function initEditInteractions(
         confidence: 'high',
         dismissed: false,
       };
-      // eslint-disable-next-line no-console
-      console.log(
-        `Field created: type=${type} placement=(x=${String(xPdf)}, y=${String(yPdf)}, w=${String(w)}, h=${String(h)})`,
-      );
       if (radioValue !== undefined) newField.radioValue = radioValue;
       if (groupName !== undefined) newField.groupName = groupName;
       safePage.candidateFields.push(newField);
@@ -1640,7 +1636,9 @@ async function exportViaCanvas(fpdfDoc: FpdfDocument, pagesContainer: HTMLElemen
   const res = await fetch('/export-canvas', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pages }),
+    // Send the live in-memory doc so the server uses the latest candidate field
+    // values (including any user-created fields not yet saved via WebSocket).
+    body: JSON.stringify({ pages, doc: fpdfDoc }),
   });
 
   if (!res.ok) {

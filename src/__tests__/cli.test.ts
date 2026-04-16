@@ -237,6 +237,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -273,6 +274,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -309,6 +311,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -347,6 +350,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -382,6 +386,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -439,6 +444,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -496,6 +502,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 
@@ -647,6 +654,7 @@ describe('CLI program structure', () => {
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
         close: vi.fn().mockResolvedValue(undefined),
       });
 

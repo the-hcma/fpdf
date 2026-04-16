@@ -273,7 +273,10 @@ export function buildProgram(): Command {
           }
 
           if (opts.open) {
-            await open(handle.url);
+            const browserUrl = handle.ownerToken
+              ? `${handle.url}/?session=${handle.ownerToken}`
+              : handle.url;
+            await open(browserUrl);
           }
 
           // Keep the process alive until SIGINT / SIGTERM

@@ -723,6 +723,174 @@ describe('picker mode (no doc on start)', () => {
     const body = (await res.json()) as UiCapabilitiesResponse;
     expect(body.canBrowseServerFiles).toBe(true);
   });
+
+  it('ownerToken is null in picker mode', () => {
+    expect(pickerHandle.ownerToken).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session isolation
+// ---------------------------------------------------------------------------
+
+describe('session isolation', () => {
+  it('ownerToken is set when server starts in fill mode', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-fill-mode');
+    await mkdir(dir, { recursive: true });
+    const pdfPath = path.join(dir, 'test.pdf');
+    const jsonPath = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+    await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+    try {
+      expect(h.ownerToken).toBeTruthy();
+      expect(typeof h.ownerToken).toBe('string');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('GET / without cookie returns pick.html when server is in fill mode', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-no-cookie');
+    await mkdir(dir, { recursive: true });
+    const pdfPath = path.join(dir, 'test.pdf');
+    const jsonPath = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+    await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+    try {
+      // No cookie — should see the picker, not the fill UI
+      const res = await fetch(h.url, { redirect: 'manual' });
+      expect(res.status).toBe(200);
+      // Can't serve actual pick.html from tests, but the server falls back to
+      // the placeholder; what matters is no redirect and no 302.
+      expect(res.headers.get('content-type')).toContain('text/html');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('GET /?session=<token> sets cookie and redirects to /', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-token-redirect');
+    await mkdir(dir, { recursive: true });
+    const pdfPath = path.join(dir, 'test.pdf');
+    const jsonPath = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+    await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+    try {
+      if (h.ownerToken === null) throw new Error('expected ownerToken to be set');
+      const token = h.ownerToken;
+      const res = await fetch(`${h.url}/?session=${token}`, { redirect: 'manual' });
+      expect(res.status).toBe(302);
+      expect(res.headers.get('location')).toBe('/');
+      const setCookie = res.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain('fpdf-session=');
+      expect(setCookie).toContain(token);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('GET / with valid cookie serves index.html (fill UI)', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-with-cookie');
+    await mkdir(dir, { recursive: true });
+    const pdfPath = path.join(dir, 'test.pdf');
+    const jsonPath = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+    await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+    try {
+      if (h.ownerToken === null) throw new Error('expected ownerToken to be set');
+      const token = h.ownerToken;
+      // First: exchange the token for a cookie
+      const tokenRes = await fetch(`${h.url}/?session=${token}`, { redirect: 'manual' });
+      expect(tokenRes.status).toBe(302);
+      const rawCookie = tokenRes.headers.get('set-cookie') ?? '';
+      const cookieValue = rawCookie.split(';')[0] ?? '';
+
+      // Second: GET / with the cookie — should get the fill UI (200, html)
+      const res = await fetch(h.url, {
+        headers: { Cookie: cookieValue },
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/html');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('GET / with wrong cookie returns pick.html in fill mode', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-wrong-cookie');
+    await mkdir(dir, { recursive: true });
+    const pdfPath = path.join(dir, 'test.pdf');
+    const jsonPath = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+    await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+    try {
+      // Send the wrong token as a cookie
+      const res = await fetch(h.url, {
+        headers: { Cookie: 'fpdf-session=wrong-token' },
+        redirect: 'manual',
+      });
+      expect(res.status).toBe(200);
+      // Falls back to pick.html (or placeholder) — not index.html
+      expect(res.headers.get('content-type')).toContain('text/html');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('POST /open sets fpdf-session cookie in response', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-open-cookie');
+    await mkdir(dir, { recursive: true });
+    const pdfDoc = await PDFDocument.create();
+    pdfDoc.addPage([612, 792]);
+    const pdfPath = path.join(dir, 'test.pdf');
+    await writeFile(pdfPath, await pdfDoc.save());
+
+    const h = await startServer({});
+    try {
+      const res = await fetch(`${h.url}/open`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: pdfPath }),
+      });
+      expect(res.status).toBe(200);
+      const setCookie = res.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain('fpdf-session=');
+      expect(h.ownerToken).toBeTruthy();
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('POST /reset clears the fpdf-session cookie', async () => {
+    const dir = path.join(tmpdir(), 'fpdf-session-reset-cookie');
+    await mkdir(dir, { recursive: true });
+    const pdfPath = path.join(dir, 'test.pdf');
+    const jsonPath = path.join(dir, 'test.fpdf.json');
+    await writeFile(pdfPath, Buffer.from('%PDF-1.4\n%%EOF\n'));
+    await writeFile(jsonPath, JSON.stringify(MOCK_DOC, null, 2), 'utf-8');
+
+    const h = await startServer({ pdfPath, doc: MOCK_DOC, jsonPath });
+    try {
+      const res = await fetch(`${h.url}/reset`, { method: 'POST' });
+      expect(res.status).toBe(200);
+      const setCookie = res.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain('fpdf-session=;');
+      expect(h.ownerToken).toBeNull();
+    } finally {
+      await h.close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -59,6 +59,17 @@ export interface ServerHandle {
    * IPv4 interface plus the loopback URL.
    */
   networkUrls: string[];
+  /**
+   * Session owner token. Set when the server starts in fill mode (either via options
+   * or after POST /open / POST /upload). Null in picker mode.
+   *
+   * The CLI uses this to construct the initial browser URL:
+   *   `${url}/?session=${ownerToken}`
+   * The catch-all route accepts that query param on first visit, sets the
+   * `fpdf-session` cookie, and redirects to `/`. Subsequent requests are
+   * authenticated by the cookie; browsers without the cookie see the picker.
+   */
+  ownerToken: string | null;
   /** Shut down the server and close all WebSocket connections. */
   close: () => Promise<void>;
 }
@@ -78,6 +89,9 @@ export interface ServerHandle {
  *
  * @returns A ServerHandle with the allocated URL and a close() function.
  */
+/** Cookie name used to authenticate the session owner in the browser. */
+const FPDF_SESSION_COOKIE = 'fpdf-session';
+
 export async function startServer(options: ServerOptions): Promise<ServerHandle> {
   const sessionId = options.sessionId ?? randomUUID();
 
@@ -89,6 +103,13 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   let isUploadSession = false;
   /** Temp directory created for upload sessions; cleaned up on reset/close. */
   let sessionTempDir: string | null = null;
+  /**
+   * Identifies the session owner. Set when fill mode starts (either at server
+   * creation or on POST /open / POST /upload). Cleared on POST /reset.
+   * The browser that owns the session holds a matching `fpdf-session` cookie;
+   * clients without the cookie see the picker even when liveDoc is set.
+   */
+  let ownerToken: string | null = options.doc !== undefined ? randomUUID() : null;
 
   async function cleanupTempDir(): Promise<void> {
     if (sessionTempDir === null) return;
@@ -127,6 +148,32 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // path.resolve handles . and .. so no additional root restriction is needed.
   function resolveSafePath(requested: string): string {
     return path.resolve(requested);
+  }
+
+  /** Extract the fpdf-session cookie value from an incoming request, or null if absent. */
+  function getSessionCookie(req: express.Request): string | null {
+    const raw = req.headers.cookie ?? '';
+    for (const part of raw.split(';')) {
+      const eqIdx = part.indexOf('=');
+      if (eqIdx === -1) continue;
+      const name = part.slice(0, eqIdx).trim();
+      const value = part.slice(eqIdx + 1).trim();
+      if (name === FPDF_SESSION_COOKIE) return value || null;
+    }
+    return null;
+  }
+
+  /** Set the fpdf-session cookie on a response. */
+  function setSessionCookie(res: express.Response, token: string): void {
+    res.setHeader('Set-Cookie', `${FPDF_SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax`);
+  }
+
+  /** Clear the fpdf-session cookie on a response. */
+  function clearSessionCookie(res: express.Response): void {
+    res.setHeader(
+      'Set-Cookie',
+      `${FPDF_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`,
+    );
   }
 
   function normalizeIp(raw: string | undefined): string | null {
@@ -418,8 +465,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         currentPdfPath = safePath;
         currentJsonPath = jsonPath;
         liveDoc = doc;
+        ownerToken = randomUUID();
         resetJsonWatcher(path.dirname(jsonPath));
         broadcast(JSON.stringify({ type: 'pdfOpened', doc }));
+        setSessionCookie(res, ownerToken);
         res.json({ ok: true });
       } finally {
         analyzeInProgress = false;
@@ -562,8 +611,10 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         currentJsonPath = tempJsonPath;
         liveDoc = doc;
         isUploadSession = true;
+        ownerToken = randomUUID();
         resetJsonWatcher(tempDir);
         broadcast(JSON.stringify({ type: 'pdfOpened', doc, uploaded: true }));
+        setSessionCookie(res, ownerToken);
         res.json({ ok: true });
       } finally {
         analyzeInProgress = false;
@@ -600,9 +651,11 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       currentPdfPath = null;
       currentJsonPath = null;
       isUploadSession = false;
+      ownerToken = null;
       jsonWatcher?.close();
       jsonWatcher = null;
       broadcast(JSON.stringify({ type: 'pickerMode' }));
+      clearSessionCookie(res);
       res.json({ ok: true });
     } catch (err: unknown) {
       logger.error(`/reset failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -617,10 +670,47 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   app.use(express.static(publicDir, { index: false }));
 
   // --- Catch-all: serve pick.html in picker mode, index.html in fill mode ---
-  app.get(/.*/, (_req, res) => {
+  //
+  // Session isolation: when the server is in fill mode, only the browser that
+  // owns the session (identified by the `fpdf-session` cookie) receives
+  // index.html.  Any other browser — incognito, a different user, a fresh tab
+  // — receives pick.html so they start at the picker instead of landing in the
+  // middle of someone else's fill session.
+  //
+  // First-visit flow (CLI `--open` or any link that includes the token):
+  //   GET /?session=<ownerToken>  →  set cookie, 302 to /
+  //   GET /                (with cookie)  →  index.html
+  app.get(/.*/, (req, res) => {
     const run = async (): Promise<void> => {
-      const filename = liveDoc === null ? 'pick.html' : 'index.html';
-      const html = await readFile(path.join(publicDir, filename), 'utf-8');
+      if (liveDoc === null || ownerToken === null) {
+        // Picker mode — always serve pick.html.
+        const html = await readFile(path.join(publicDir, 'pick.html'), 'utf-8');
+        res.setHeader('Content-Type', 'text/html');
+        res.end(html);
+        return;
+      }
+
+      // Fill mode: check session ownership.
+      const sessionParam = typeof req.query.session === 'string' ? req.query.session : null;
+      if (sessionParam === ownerToken) {
+        // First visit with the URL token (e.g. from CLI --open).
+        // Mint the cookie and redirect to the clean root URL.
+        setSessionCookie(res, ownerToken);
+        res.redirect(302, '/');
+        return;
+      }
+
+      const cookieToken = getSessionCookie(req);
+      if (cookieToken !== ownerToken) {
+        // No matching cookie — different browser / incognito / different user.
+        // Show the picker so they can start their own session.
+        const html = await readFile(path.join(publicDir, 'pick.html'), 'utf-8');
+        res.setHeader('Content-Type', 'text/html');
+        res.end(html);
+        return;
+      }
+
+      const html = await readFile(path.join(publicDir, 'index.html'), 'utf-8');
       res.setHeader('Content-Type', 'text/html');
       res.end(html);
     };
@@ -867,5 +957,14 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       }
     });
 
-  return { url, networkUrls, close };
+  // Use a getter so callers always read the current ownerToken value even after
+  // POST /open, POST /upload, or POST /reset mutate it.
+  return {
+    url,
+    networkUrls,
+    get ownerToken() {
+      return ownerToken;
+    },
+    close,
+  };
 }

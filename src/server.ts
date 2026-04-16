@@ -622,6 +622,14 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   // --- WebSocket server ---
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
+  // When httpServer emits an error (e.g. EADDRINUSE), the WebSocketServer
+  // re-emits the same error on itself.  The httpServer 'error' handler below
+  // already rejects the startup promise; this listener prevents Node from
+  // treating the WSS re-emission as an unhandled error event and crashing.
+  wss.on('error', () => {
+    // intentionally empty — handled by httpServer.once('error', …) below
+  });
+
   function broadcast(msg: string): void {
     for (const client of wss.clients) {
       if (client.readyState === 1 /* OPEN */) client.send(msg);

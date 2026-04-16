@@ -356,14 +356,16 @@ async function executeUpload(): Promise<void> {
   formData.append('pdf', pendingPdfFile);
   if (pendingJsonFile) formData.append('json', pendingJsonFile);
 
-  const pdfFile = pendingPdfFile;
   pendingPdfFile = null;
   pendingJsonFile = null;
 
   try {
     await uploadWithProgress(formData);
-    // Success — WS pdfOpened triggers navigation
-    setStatus(`Opening ${pdfFile.name}…`);
+    // Navigate directly after a successful upload — don't rely on the WebSocket
+    // broadcast, which requires nginx WS upgrade headers to be active and the
+    // connection to be established before the response arrives.
+    sessionStorage.setItem('fpdf-upload-session', 'true');
+    window.location.replace('/');
   } catch (err) {
     busy = false;
     setStatus('');
@@ -430,7 +432,8 @@ function initUpload(): void {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 function initWebSocket(): void {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
   ws.addEventListener('message', (event) => {
     const raw = typeof event.data === 'string' ? event.data : '';
     let msg: unknown;

@@ -186,7 +186,8 @@ function initWebSocket(
   onSaved: (updatedAt: string, uploaded: boolean) => void,
   onReload: (doc: FpdfDocument) => void,
 ): (doc: FpdfDocument) => void {
-  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${wsProtocol}//${location.host}/ws`);
 
   ws.addEventListener('message', (event) => {
     const raw = typeof event.data === 'string' ? event.data : '';

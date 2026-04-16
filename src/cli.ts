@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { writeFile, readFile, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,111 @@ async function migrateDoc(pdfPath: string, oldDoc: FpdfDocument): Promise<FpdfDo
   }
 
   return freshDoc;
+}
+
+/**
+ * Try to find the PID of a process listening on the given TCP port.
+ * Attempts `ss` (Linux) then `lsof` (macOS / Linux fallback).
+ * Returns null if neither tool is available or no listener is found.
+ */
+function findPidOnPort(port: number): number | null {
+  // ss path (Linux): output has users:(("...",pid=NNN,...)) when a process owns the socket
+  const ss = spawnSync('ss', ['-tlnpH', `sport = :${String(port)}`], {
+    encoding: 'utf-8',
+    timeout: 2000,
+  });
+  if (ss.status === 0 && ss.stdout) {
+    const m = /pid=(\d+)/.exec(ss.stdout);
+    if (m?.[1]) return parseInt(m[1], 10);
+  }
+
+  // lsof fallback (macOS / Linux)
+  const lsof = spawnSync('lsof', ['-ti', `:${String(port)}`, '-sTCP:LISTEN'], {
+    encoding: 'utf-8',
+    timeout: 2000,
+  });
+  if (lsof.status === 0 && lsof.stdout) {
+    const firstLine = lsof.stdout.trim().split('\n')[0] ?? '';
+    const pid = parseInt(firstLine, 10);
+    if (!isNaN(pid)) return pid;
+  }
+
+  return null;
+}
+
+/**
+ * Return true when the process with the given PID appears to be an fpdf instance.
+ * Checks /proc/<pid>/cmdline (Linux) then falls back to `ps`.
+ */
+function isFpdfProcess(pid: number): boolean {
+  // Linux: null-delimited argv in /proc/<pid>/cmdline
+  try {
+    const cmdline = readFileSync(`/proc/${String(pid)}/cmdline`, 'latin1');
+    return cmdline.includes('fpdf');
+  } catch {
+    // not Linux or process already gone
+  }
+
+  const ps = spawnSync('ps', ['-p', String(pid), '-o', 'command='], {
+    encoding: 'utf-8',
+    timeout: 2000,
+  });
+  return ps.status === 0 && ps.stdout.includes('fpdf');
+}
+
+/**
+ * Poll until the process with the given PID is gone, or until timeoutMs elapses.
+ */
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0); // throws ESRCH when the process is gone
+    } catch {
+      return;
+    }
+    await new Promise<void>((r) => setTimeout(r, 100));
+  }
+}
+
+/**
+ * Start the server; when the port is already in use by a previous fpdf
+ * instance, offer to stop that instance and retry.  Any other EADDRINUSE
+ * (different process on the port) re-throws the original error.
+ */
+async function startServerRestarting(
+  options: Parameters<typeof startServer>[0],
+): Promise<import('./server.js').ServerHandle> {
+  try {
+    return await startServer(options);
+  } catch (err: unknown) {
+    if (!(err instanceof Error) || !err.message.includes('already in use')) throw err;
+
+    const port = options.port;
+    if (port === undefined) throw err; // OS-allocated port — should not reach here
+
+    const pid = findPidOnPort(port);
+    if (pid === null || !isFpdfProcess(pid)) throw err;
+
+    const cyan = process.stderr.isTTY ? '\x1b[36m' : '';
+    const reset = process.stderr.isTTY ? '\x1b[0m' : '';
+    const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(
+        `${cyan}[fpdf] Another fpdf instance (pid ${String(pid)}) is already on port ${String(port)}. Stop it and restart? [Y/n]${reset} `,
+        (a) => {
+          rl.close();
+          resolve(a);
+        },
+      );
+    });
+
+    if (/^[Nn]/u.test(answer)) throw err;
+
+    process.kill(pid, 'SIGTERM');
+    await waitForProcessExit(pid, 3000);
+    return await startServer(options);
+  }
 }
 
 export function buildProgram(): Command {
@@ -152,7 +257,7 @@ export function buildProgram(): Command {
           const fieldWord = totalFields === 1 ? 'field' : 'fields';
           const host = opts.listenAll ? '0.0.0.0' : undefined;
           const port = opts.port !== undefined ? parseInt(opts.port, 10) : undefined;
-          const handle = await startServer({
+          const handle = await startServerRestarting({
             pdfPath,
             doc,
             jsonPath,
@@ -439,7 +544,7 @@ export function buildProgram(): Command {
     const run = async (): Promise<void> => {
       const host = shouldListenAll ? '0.0.0.0' : undefined;
       const port = portArg !== undefined ? parseInt(portArg, 10) : undefined;
-      const handle = await startServer({
+      const handle = await startServerRestarting({
         autoShutdown: true,
         ...(host !== undefined && { host }),
         ...(port !== undefined && { port }),

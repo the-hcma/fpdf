@@ -247,9 +247,10 @@ while [[ "$_fpdf_node_skip" == '0' && "$_node_major" -lt "$_min_major" ]]; do
   _node_major=$(node --version | tr -d 'v' | cut -d. -f1)
 done
 
-# Warn if node_modules is out of sync with pnpm-lock.yaml.
-while [ "$root_dir/pnpm-lock.yaml" -nt "$root_dir/node_modules" ]; do
-  echo "[fpdf] Dependencies may be out of date (pnpm-lock.yaml has changed since last install)." >&2
+# Warn if node_modules is out of sync with package.json or pnpm-lock.yaml.
+while [ "$root_dir/package.json" -nt "$root_dir/node_modules" ] || \
+      [ "$root_dir/pnpm-lock.yaml" -nt "$root_dir/node_modules" ]; do
+  echo "[fpdf] Dependencies may be out of date (package.json or pnpm-lock.yaml has changed since last install)." >&2
   printf '%s[fpdf] Run pnpm install to update? [Y/n] %s' "$q" "$r" >&2
   read -r reply || { echo >&2; exit 1; }
   [[ "$reply" =~ ^[Nn] ]] && break

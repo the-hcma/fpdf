@@ -1,3 +1,8 @@
+body {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
 #picker-toolbar {
   display: flex;
   align-items: center;
@@ -33,6 +38,10 @@
   gap: 4px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--border-toolbar);
+}
+
+#picker-nav[hidden] {
+  display: none;
 }
 
 #picker-nav button {

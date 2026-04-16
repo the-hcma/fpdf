@@ -97,15 +97,20 @@ function applyUiCapabilities(canBrowse: boolean): void {
   const navEl = document.getElementById('picker-nav');
   const statusEl = document.getElementById('picker-status');
   const entryListEl = document.getElementById('entry-list');
+  const introMsgEl = document.getElementById('picker-intro-message');
 
   if (canBrowse) {
     if (navEl) navEl.hidden = false;
     if (statusEl) statusEl.hidden = false;
     if (entryListEl) entryListEl.hidden = false;
+    if (introMsgEl)
+      introMsgEl.textContent =
+        'Browse to a PDF on this server, or upload one from your device below.';
   } else {
     if (navEl) navEl.hidden = true;
     if (statusEl) statusEl.hidden = true;
     if (entryListEl) entryListEl.hidden = true;
+    if (introMsgEl) introMsgEl.textContent = 'Upload a PDF from your device to get started.';
   }
 }
 

@@ -868,12 +868,14 @@ function initEditInteractions(
     cb();
   });
 
-  // Escape key: exit edit mode, dismiss context menu and name editor
+  // Escape key: exit edit mode, dismiss context menu, name editor, and banners
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       editSelectField(null);
       hideContextMenu();
       hideNameEditor();
+      dismissError();
+      document.getElementById('warn-banner')?.setAttribute('hidden', '');
     }
   });
 

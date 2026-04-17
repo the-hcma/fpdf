@@ -58,11 +58,17 @@ auth-bugfix/handle-401-status-codes
 
 ### Basic Workflow
 
-1. Make changes to files
-2. Stage changes: `git add <files>`
-3. Create branch: `gt create branch-name -m "commit message"`
-4. Repeat for each PR in the stack
-5. Submit: `gt submit --no-interactive`
+1. Create a new worktree for the stack (note the `-wt` suffix on the branch name):
+   ```bash
+   git worktree add -b <stack-name>-wt .worktrees/<stack-name>-wt main
+   ```
+2. Navigate to the new worktree: `cd .worktrees/<stack-name>-wt`
+3. Initialize the stack base: `gt track -p main`
+4. Make changes to files
+5. Stage changes: `git add <files>`
+6. Create branch: `gt create branch-name -m "commit message"`
+7. Repeat for each PR in the stack
+8. Submit: `gt submit --no-interactive`
 
 ### Handle Untracked Branches (common with worktrees)
 

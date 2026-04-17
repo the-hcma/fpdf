@@ -105,6 +105,16 @@ describe('startServer', () => {
     });
   });
 
+  describe('GET /health', () => {
+    it('returns 200 with text/plain "ok"', async () => {
+      const res = await fetch(`${baseUrl}/health`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/plain');
+      const text = await res.text();
+      expect(text).toBe('ok');
+    });
+  });
+
   describe('GET /pdf', () => {
     it('returns 200 with content-type application/pdf', async () => {
       const res = await fetch(`${baseUrl}/pdf`);

@@ -205,6 +205,12 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     return { pdfPath: currentPdfPath, doc: liveDoc, jsonPath: currentJsonPath };
   }
 
+  // --- Health check ---
+  app.get('/health', (_req, res) => {
+    res.setHeader('Content-Type', 'text/plain');
+    res.send('ok');
+  });
+
   // --- PDF bytes ---
   app.get('/pdf', (_req, res) => {
     const run = async (): Promise<void> => {

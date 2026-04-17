@@ -49,7 +49,10 @@ export interface Logger {
 }
 
 function formatMessage(level: LogLevel, msg: string): string {
-  return `[fpdf:${level}] ${msg}`;
+  const now = new Date();
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+  const ts = `${pad(now.getFullYear(), 4)}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${pad(now.getMilliseconds(), 3)}`;
+  return `${ts} [${level}] ${msg}`;
 }
 
 export const logger: Logger = {

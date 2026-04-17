@@ -1,9 +1,12 @@
 // integration
 import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { PDFDocument, degrees } from 'pdf-lib';
 import { exportPdf, ExportError } from '../exporter.js';
 import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
-import { makePdfBytes, writeTempPdf } from './helpers.js';
+import { makePdfBytes, writeTempPdf, MINIMAL_JPEG, MINIMAL_PNG } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -528,5 +531,103 @@ describe('candidate field on a /Rotate 180 page', () => {
     expect(Math.abs(rect.y - 722)).toBeLessThan(1.5);
     expect(Math.abs(rect.width - 120)).toBeLessThan(1.5);
     expect(Math.abs(rect.height - 20)).toBeLessThan(1.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Placed images — exportPdf (AcroForm path)
+// ---------------------------------------------------------------------------
+
+describe('exportPdf — placed images', () => {
+  let blankPdfPath: string;
+
+  beforeAll(async () => {
+    const blankBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+    });
+    blankPdfPath = await writeTempPdf('blank.pdf', blankBytes, 'fpdf-placed-img-tests');
+  });
+
+  function makeBlankDoc(): FpdfDocument {
+    return {
+      metadata: {
+        version: '1.0',
+        originalPdf: '',
+        pdfFilename: 'blank.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 1,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+  }
+
+  it('stamps a placed JPEG into the exported AcroForm PDF', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
+    const id = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
+    await writeFile(path.join(dir, `${id}.jpg`), MINIMAL_JPEG);
+    const doc = makeBlankDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/jpeg', placement: { x: 50, y: 650, width: 120, height: 60 } },
+    ];
+    const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
+    // The exported PDF should be larger than the source because it embeds the image.
+    const sourceBytes = await (await import('node:fs/promises')).readFile(blankPdfPath);
+    expect(bytes.length).toBeGreaterThan(sourceBytes.length);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+  });
+
+  it('stamps a placed PNG into the exported AcroForm PDF', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
+    const id = 'dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb';
+    await writeFile(path.join(dir, `${id}.png`), MINIMAL_PNG);
+    const doc = makeBlankDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/png', placement: { x: 100, y: 600, width: 80, height: 80 } },
+    ];
+    const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
+    const sourceBytes = await (await import('node:fs/promises')).readFile(blankPdfPath);
+    expect(bytes.length).toBeGreaterThan(sourceBytes.length);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+  });
+
+  it('skips a placed image whose file is missing and still produces a valid PDF', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
+    const id = 'eeeeeeee-ffff-aaaa-bbbb-cccccccccccc';
+    // Intentionally do NOT write the file — drawPlacedImages should warn and continue.
+    const doc = makeBlankDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/jpeg', placement: { x: 0, y: 0, width: 100, height: 50 } },
+    ];
+    const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+  });
+
+  it('exports successfully when imagesDir is omitted and the page has no placed images', async () => {
+    const doc = makeBlankDoc();
+    const bytes = await exportPdf(blankPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
   });
 });

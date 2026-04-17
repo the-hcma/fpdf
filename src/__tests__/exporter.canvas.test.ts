@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
 import { PDFDocument, PDFTextField, PDFCheckBox } from 'pdf-lib';
 import { exportFromImages, type RenderedPage } from '../exporter.js';
 import type { FpdfDocument, CandidateField } from '../types.js';
-import { MINIMAL_JPEG } from './helpers.js';
+import { MINIMAL_JPEG, MINIMAL_PNG } from './helpers.js';
 
 function makeDoc(candidateFields: CandidateField[] = []): FpdfDocument {
   return {
@@ -211,5 +214,59 @@ describe('exportFromImages — readOnly=true (finalized export)', () => {
     const result = await PDFDocument.load(bytes);
     const tf = result.getForm().getFields()[0] as PDFTextField;
     expect(tf.isReadOnly()).toBe(true);
+  });
+});
+
+describe('exportFromImages — placed images', () => {
+  it('stamps a placed JPEG image into the exported PDF', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-img-'));
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    await writeFile(path.join(dir, `${id}.jpg`), MINIMAL_JPEG);
+    const doc = makeDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/jpeg', placement: { x: 0, y: 0, width: 100, height: 100 } },
+    ];
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, doc, false, dir);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+    // The exported PDF should be larger than the page JPEG alone because it
+    // also contains the embedded placed-image JPEG bytes.
+    expect(bytes.length).toBeGreaterThan(MINIMAL_JPEG.length);
+  });
+
+  it('stamps a placed PNG image into the exported PDF', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-img-'));
+    const id = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
+    await writeFile(path.join(dir, `${id}.png`), MINIMAL_PNG);
+    const doc = makeDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/png', placement: { x: 0, y: 0, width: 100, height: 100 } },
+    ];
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, doc, false, dir);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+    expect(bytes.length).toBeGreaterThan(MINIMAL_PNG.length);
+  });
+
+  it('skips a placed image whose file is missing and still produces a valid PDF', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-img-'));
+    const id = '11111111-2222-3333-4444-555555555555';
+    // Intentionally do NOT write the file — drawPlacedImages should warn and skip.
+    const doc = makeDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/jpeg', placement: { x: 0, y: 0, width: 100, height: 100 } },
+    ];
+    const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
+    const bytes = await exportFromImages(pages, doc, false, dir);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
   });
 });

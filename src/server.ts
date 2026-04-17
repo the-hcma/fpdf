@@ -235,7 +235,8 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       const body = (req.body ?? {}) as { doc?: unknown };
       const docForExport =
         typeof body.doc === 'object' && body.doc !== null ? (body.doc as FpdfDocument) : ctx.doc;
-      const filled = await exportPdf(ctx.pdfPath, docForExport, { readOnly: true });
+      const imagesDir = path.join(path.dirname(ctx.jsonPath), '.fpdf-images');
+      const filled = await exportPdf(ctx.pdfPath, docForExport, { readOnly: true, imagesDir });
       const stem = path.basename(
         docForExport.metadata.pdfFilename,
         path.extname(docForExport.metadata.pdfFilename),
@@ -410,7 +411,8 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       const body = (_req.body ?? {}) as { doc?: unknown };
       const docForExport =
         typeof body.doc === 'object' && body.doc !== null ? (body.doc as FpdfDocument) : ctx.doc;
-      const filled = await exportPdf(ctx.pdfPath, docForExport);
+      const imagesDir = path.join(path.dirname(ctx.jsonPath), '.fpdf-images');
+      const filled = await exportPdf(ctx.pdfPath, docForExport, { imagesDir });
       if (isUploadSession) {
         const stem = path.basename(
           docForExport.metadata.pdfFilename,
@@ -470,7 +472,8 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       const docForExport =
         typeof body.doc === 'object' && body.doc !== null ? (body.doc as FpdfDocument) : ctx.doc;
       // Export PDF: finalized read-only output — fields have no interactive editing.
-      const filled = await exportFromImages(pages, docForExport, true);
+      const imagesDir = path.join(path.dirname(ctx.jsonPath), '.fpdf-images');
+      const filled = await exportFromImages(pages, docForExport, true, imagesDir);
       const stem = path.basename(
         docForExport.metadata.pdfFilename,
         path.extname(docForExport.metadata.pdfFilename),

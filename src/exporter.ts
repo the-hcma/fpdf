@@ -1,4 +1,6 @@
+import path from 'node:path';
 import { readFile } from 'node:fs/promises';
+import { logger } from './logger.js';
 import {
   PDFDocument,
   PDFFont,
@@ -125,10 +127,49 @@ export class ExportError extends Error {
   }
 }
 
+/**
+ * Stamp all placed images for every page onto `pdfDoc`.  Missing image files
+ * are skipped with a warning so a missing upload never blocks the export.
+ */
+async function drawPlacedImages(
+  pdfDoc: PDFDocument,
+  doc: FpdfDocument,
+  imagesDir: string,
+): Promise<void> {
+  for (const docPage of doc.pages) {
+    if (!docPage.images?.length) continue;
+    const page = pdfDoc.getPage(docPage.pageNumber - 1);
+    const pageRotation = docPage.rotationDeg ?? 0;
+    for (const img of docPage.images) {
+      const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
+      const imgPath = path.join(imagesDir, `${img.id}.${ext}`);
+      let buf: Buffer;
+      try {
+        buf = await readFile(imgPath);
+      } catch {
+        logger.warn(`Placed image ${img.id}.${ext} not found on disk — skipping`);
+        continue;
+      }
+      const embedded =
+        img.mimeType === 'image/jpeg' ? await pdfDoc.embedJpg(buf) : await pdfDoc.embedPng(buf);
+      const raw = toRawRect(
+        img.placement.x,
+        img.placement.y,
+        img.placement.width,
+        img.placement.height,
+        docPage.widthPt,
+        docPage.heightPt,
+        pageRotation,
+      );
+      page.drawImage(embedded, raw);
+    }
+  }
+}
+
 export async function exportPdf(
   pdfPath: string,
   doc: FpdfDocument,
-  options: { readOnly?: boolean } = {},
+  options: { readOnly?: boolean; imagesDir?: string } = {},
 ): Promise<Uint8Array> {
   const bytes = await readFile(pdfPath);
   let pdfDoc: PDFDocument;
@@ -243,6 +284,9 @@ export async function exportPdf(
 
     // Step 6: Save without ObjStm compression so every in-memory dict change
     // (including the restored /XFA) is written via copyBytesInto().
+    if (options.imagesDir !== undefined) {
+      await drawPlacedImages(pdfDoc, doc, options.imagesDir);
+    }
     return pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false });
   } else {
     // ── Pure AcroForm PDF ─────────────────────────────────────────────────────
@@ -268,6 +312,9 @@ export async function exportPdf(
 
   // updateFieldAppearances: false — we already ran it explicitly above with
   // helv so every field is guaranteed to have a rendered appearance stream.
+  if (options.imagesDir !== undefined) {
+    await drawPlacedImages(pdfDoc, doc, options.imagesDir);
+  }
   return pdfDoc.save({ updateFieldAppearances: false });
 }
 
@@ -1009,6 +1056,7 @@ export async function exportFromImages(
   pages: RenderedPage[],
   doc: FpdfDocument,
   readOnly = false,
+  imagesDir?: string,
 ): Promise<Uint8Array> {
   const pdfDoc = await PDFDocument.create();
 
@@ -1031,6 +1079,10 @@ export async function exportFromImages(
   }
 
   createCandidateWidgets(pdfDoc, doc, fontCache, readOnly);
+
+  if (imagesDir !== undefined) {
+    await drawPlacedImages(pdfDoc, doc, imagesDir);
+  }
 
   return pdfDoc.save();
 }

@@ -1,0 +1,183 @@
+#!/bin/bash
+
+# Setup script for fpdf systemd service
+# This script configures fpdf to run as a persistent background service
+
+set -e
+
+# Configuration
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_DIR
+readonly SERVICE_FILENAME="fpdf.service"
+readonly SOURCE_SERVICE="${REPO_DIR}/etc/systemd/${SERVICE_FILENAME}"
+readonly TARGET_DIR="${HOME}/.config/systemd/user"
+readonly TARGET_SERVICE="${TARGET_DIR}/${SERVICE_FILENAME}"
+
+# Function to display help
+show_help() {
+    cat << EOF
+fpdf Setup Utility - Persistent Service
+
+USAGE:
+    ./scripts/setup-service [OPTIONS]
+
+DESCRIPTION:
+    Configures fpdf to run as a persistent background service using systemd.
+    Ensures lingering is enabled for the user so the service starts on boot
+    and remains active without a login session.
+
+OPTIONS:
+    -s, --status
+        Check the current configuration status and service health.
+
+    -h, --help
+        Display this help message and exit.
+
+    (no options)
+        Install or update the systemd service configuration.
+
+EXAMPLES:
+    # Set up or update the service
+    ./scripts/setup-service
+
+    # Check the current status
+    ./scripts/setup-service --status
+EOF
+    exit 0
+}
+
+# Function to check current status
+check_status() {
+    local all_good=true
+    echo "🔍 Verifying fpdf service configuration..."
+    echo "----------------------------------------"
+
+    # 1. Check service file is installed and up to date
+    if [[ ! -f "$TARGET_SERVICE" ]]; then
+        echo "❌ Service:  Not installed (Run setup to install it)"
+        all_good=false
+    elif diff --brief <(sed "s|@@REPO_DIR@@|${REPO_DIR}|g" "$SOURCE_SERVICE") "$TARGET_SERVICE" > /dev/null 2>&1; then
+        echo "✅ Service:  Up to date ($TARGET_SERVICE)"
+    else
+        echo "❌ Service:  Outdated (Run setup to update it)"
+        all_good=false
+    fi
+
+    # 2. Check Lingering
+    local current_user
+    current_user=$(whoami)
+    if loginctl show-user "$current_user" --property=Linger | grep -q "Linger=yes"; then
+        echo "✅ Linger:   Enabled for $current_user"
+    else
+        echo "❌ Linger:   Disabled (Service won't survive reboots!)"
+        all_good=false
+    fi
+
+    # 3. Check Systemd Service Status
+    if systemctl --user is-active fpdf.service > /dev/null 2>&1; then
+        echo "✅ Active:   Running"
+    else
+        echo "❌ Active:   Inactive (Stopped)"
+        all_good=false
+    fi
+
+    if systemctl --user is-enabled fpdf.service > /dev/null 2>&1; then
+        echo "✅ Enabled:  Auto-start is active"
+    else
+        echo "❌ Enabled:  Auto-start is disabled"
+        all_good=false
+    fi
+
+    echo "----------------------------------------"
+    if $all_good; then
+        echo "✨ Everything looks good! fpdf is correctly configured."
+        return 0
+    else
+        echo "⚠️  Some issues were found. Run ./scripts/setup-service to fix them."
+        return 1
+    fi
+}
+
+# Handle arguments
+if [[ $# -gt 0 ]]; then
+    case $1 in
+        -h|--help)
+            show_help
+            ;;
+        -s|--status)
+            check_status
+            exit $?
+            ;;
+        *)
+            echo "❌ Error: Unknown option: $1"
+            echo "Run './scripts/setup-service --help' for usage information"
+            exit 1
+            ;;
+    esac
+fi
+
+# Main installation flow
+echo "Setting up fpdf systemd service..."
+
+# 1. Verify source service file exists
+if [[ ! -f "$SOURCE_SERVICE" ]]; then
+    echo "❌ Error: Source service file not found at $SOURCE_SERVICE"
+    exit 1
+fi
+
+# 2. Ensure target directory exists
+mkdir -p "$TARGET_DIR"
+
+# 3. Generate service file with repo path substituted
+generated=$(sed "s|@@REPO_DIR@@|${REPO_DIR}|g" "$SOURCE_SERVICE")
+service_changed=true
+
+if [[ -L "$TARGET_SERVICE" ]]; then
+    echo "🔗 Removing old symlink..."
+    rm "$TARGET_SERVICE"
+elif [[ -f "$TARGET_SERVICE" ]]; then
+    if diff --brief <(echo "$generated") "$TARGET_SERVICE" > /dev/null 2>&1; then
+        echo "✅ Service file unchanged: $TARGET_SERVICE"
+        service_changed=false
+    else
+        echo "🔄 Service file changed. Updating..."
+    fi
+fi
+
+if [[ "$service_changed" == "true" ]]; then
+    echo "$generated" > "$TARGET_SERVICE"
+    echo "✅ Service file generated: $TARGET_SERVICE (repo: $REPO_DIR)"
+fi
+
+# 4. Create log directory
+mkdir -p "${HOME}/scratch/fpdf"
+echo "✅ Log directory: ${HOME}/scratch/fpdf"
+
+# 5. Enable lingering for the current user
+current_user=$(whoami)
+echo "👤 Enabling lingering for user: $current_user"
+loginctl enable-linger "$current_user"
+
+# 6. Reload daemon only if service file changed
+if [[ "$service_changed" == "true" ]]; then
+    echo "🔄 Reloading systemd user daemon..."
+    systemctl --user daemon-reload
+fi
+
+# 7. Always ensure the service is enabled and running
+systemctl --user enable fpdf.service
+if [[ "$service_changed" == "true" ]]; then
+    echo "🔄 Restarting fpdf.service (config changed)..."
+    systemctl --user restart fpdf.service
+elif ! systemctl --user is-active --quiet fpdf.service; then
+    echo "🚀 Starting fpdf.service (was not running)..."
+    systemctl --user start fpdf.service
+else
+    echo "⏭️  Service file unchanged and service already running — no restart needed."
+fi
+
+echo ""
+echo "✨ fpdf service successfully configured!"
+check_status
+echo "Logs:     tail -f ${HOME}/scratch/fpdf/fpdf.log"
+echo "----------------------------------------"

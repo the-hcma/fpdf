@@ -11,7 +11,7 @@ import { WebSocket } from 'ws';
 import { PDFDocument } from 'pdf-lib';
 import { startServer, type ServerHandle } from '../server.js';
 import type { BrowseResponse, FpdfDocument, UiCapabilitiesResponse } from '../types.js';
-import { MINIMAL_JPEG } from './helpers.js';
+import { MINIMAL_JPEG, MINIMAL_PNG } from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -1621,5 +1621,82 @@ describe('POST /export-canvas', () => {
     expect(res.status).toBe(200);
     const disposition = res.headers.get('content-disposition') ?? '';
     expect(disposition).toContain('my-scan-filled.pdf');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /images — placed image upload
+// ---------------------------------------------------------------------------
+describe('POST /images', () => {
+  it('accepts a valid JPEG and returns id and mimeType', async () => {
+    const fd = new FormData();
+    fd.append('image', new Blob([MINIMAL_JPEG], { type: 'image/jpeg' }), 'sig.jpg');
+    const res = await fetch(`${baseUrl}/images`, { method: 'POST', body: fd });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; mimeType: string };
+    expect(body.mimeType).toBe('image/jpeg');
+    expect(body.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it('accepts a valid PNG and returns id and mimeType', async () => {
+    const fd = new FormData();
+    fd.append('image', new Blob([MINIMAL_PNG], { type: 'image/png' }), 'sig.png');
+    const res = await fetch(`${baseUrl}/images`, { method: 'POST', body: fd });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string; mimeType: string };
+    expect(body.mimeType).toBe('image/png');
+    expect(body.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  });
+
+  it('rejects bytes that are neither JPEG nor PNG with 400', async () => {
+    const fd = new FormData();
+    fd.append(
+      'image',
+      new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])], { type: 'application/pdf' }),
+      'doc.pdf',
+    );
+    const res = await fetch(`${baseUrl}/images`, { method: 'POST', body: fd });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain('JPEG and PNG');
+  });
+
+  it('returns 400 when no file part is present', async () => {
+    const fd = new FormData();
+    const res = await fetch(`${baseUrl}/images`, { method: 'POST', body: fd });
+    expect(res.status).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /images/:id — placed image serve
+// ---------------------------------------------------------------------------
+describe('GET /images/:id', () => {
+  let uploadedJpegId: string;
+
+  beforeAll(async () => {
+    const fd = new FormData();
+    fd.append('image', new Blob([MINIMAL_JPEG], { type: 'image/jpeg' }), 'sig.jpg');
+    const res = await fetch(`${baseUrl}/images`, { method: 'POST', body: fd });
+    const body = (await res.json()) as { id: string; mimeType: string };
+    uploadedJpegId = body.id;
+  });
+
+  it('serves the uploaded JPEG with the correct Content-Type', async () => {
+    const res = await fetch(`${baseUrl}/images/${uploadedJpegId}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/jpeg');
+    const buf = await res.arrayBuffer();
+    expect(buf.byteLength).toBe(MINIMAL_JPEG.length);
+  });
+
+  it('returns 400 for an invalid UUID format', async () => {
+    const res = await fetch(`${baseUrl}/images/not-a-valid-uuid`);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 for a valid UUID with no stored image', async () => {
+    const res = await fetch(`${baseUrl}/images/00000000-0000-0000-0000-000000000000`);
+    expect(res.status).toBe(404);
   });
 });

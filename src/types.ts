@@ -149,6 +149,19 @@ export interface TextBlock {
   fontName: string;
 }
 
+/**
+ * A user-placed image (e.g. a signature) to be stamped into the exported PDF.
+ * The image bytes are stored server-side under `.fpdf-images/<id>.<ext>` and
+ * referenced here by UUID. On export, the image is drawn into the page content
+ * stream at the specified visual-space placement.
+ */
+export interface PlacedImage {
+  /** UUID matching the filename in the server-side `.fpdf-images/` directory. */
+  id: string;
+  mimeType: 'image/jpeg' | 'image/png';
+  placement: Placement;
+}
+
 export interface PdfPage {
   pageNumber: number;
   /**
@@ -185,6 +198,12 @@ export interface PdfPage {
    * that is drawn text rather than an AcroForm widget.
    */
   textBlocks: TextBlock[];
+  /**
+   * User-placed images (e.g. signatures) to be stamped into the exported PDF.
+   * Each entry references an image stored server-side by its UUID. On export,
+   * the image is drawn into the page content stream at the specified placement.
+   */
+  images?: PlacedImage[];
 }
 
 export interface FpdfMetadata {

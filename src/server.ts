@@ -271,6 +271,132 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
     res.json(ctx.doc);
   });
 
+  // --- Placed image upload ---
+  // Accepts a JPEG or PNG upload and stores it on disk under the session's
+  // .fpdf-images/ directory.  Returns { id, mimeType } so the client can
+  // store a PlacedImage reference in the FpdfDocument.
+  // Security: file type is validated by magic bytes (not browser-supplied MIME).
+  // Size limit: 20 MB.  Only available when a PDF session is active.
+  app.post('/images', (req, res) => {
+    const run = async (): Promise<void> => {
+      const ctx = requireDoc(res);
+      if (ctx === null) return;
+
+      const id = randomUUID();
+
+      const { imgData, truncated } = await new Promise<{
+        imgData: Buffer | null;
+        truncated: boolean;
+      }>((resolve, reject) => {
+        const bb = Busboy({
+          headers: req.headers as Record<string, string>,
+          limits: { files: 1, fileSize: 20 * 1024 * 1024 },
+        });
+
+        let bytes: Buffer | null = null;
+        let wasTruncated = false;
+
+        bb.on('file', (_fieldname, fileStream, _info) => {
+          const chunks: Buffer[] = [];
+          fileStream.on('data', (chunk: Buffer) => {
+            chunks.push(chunk);
+          });
+          fileStream.on('limit', () => {
+            wasTruncated = true;
+          });
+          fileStream.on('end', () => {
+            if (!wasTruncated) {
+              bytes = Buffer.concat(chunks);
+            }
+          });
+        });
+
+        bb.on('finish', () => {
+          resolve({ imgData: bytes, truncated: wasTruncated });
+        });
+        bb.on('error', (err: Error) => {
+          reject(err);
+        });
+        req.pipe(bb);
+      });
+
+      if (truncated || imgData === null) {
+        res.status(400).json({ error: 'Image file missing or exceeds 20 MB limit' });
+        return;
+      }
+
+      // Detect MIME type from magic bytes — never trust browser-supplied type.
+      let mimeType: 'image/jpeg' | 'image/png';
+      if (imgData[0] === 0xff && imgData[1] === 0xd8) {
+        mimeType = 'image/jpeg';
+      } else if (
+        imgData[0] === 0x89 &&
+        imgData[1] === 0x50 &&
+        imgData[2] === 0x4e &&
+        imgData[3] === 0x47
+      ) {
+        mimeType = 'image/png';
+      } else {
+        res.status(400).json({ error: 'Only JPEG and PNG images are supported' });
+        return;
+      }
+
+      const ext = mimeType === 'image/jpeg' ? 'jpg' : 'png';
+      const imgDir = path.join(path.dirname(ctx.jsonPath), '.fpdf-images');
+      await mkdir(imgDir, { recursive: true });
+      const imgPath = path.join(imgDir, `${id}.${ext}`);
+      await writeFile(imgPath, imgData);
+
+      logger.info(`Stored placed image ${imgPath} (${String(imgData.length)} bytes)`);
+      res.json({ id, mimeType });
+    };
+    run().catch((err: unknown) => {
+      logger.error(`POST /images failed: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: 'Failed to save image' });
+    });
+  });
+
+  // --- Placed image serve ---
+  // Serves a previously uploaded image by its UUID.  The id is validated
+  // against the UUID format to prevent path traversal attacks.
+  app.get('/images/:id', (req, res) => {
+    const run = async (): Promise<void> => {
+      const ctx = requireDoc(res);
+      if (ctx === null) return;
+
+      const { id } = req.params;
+      // Validate UUID format — reject anything that could be a path component.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+        res.status(400).json({ error: 'Invalid image id' });
+        return;
+      }
+
+      const imgDir = path.join(path.dirname(ctx.jsonPath), '.fpdf-images');
+      // Try JPEG first, then PNG.
+      for (const [ext, mime] of [
+        ['jpg', 'image/jpeg'],
+        ['png', 'image/png'],
+      ] as [string, string][]) {
+        const imgPath = path.join(imgDir, `${id}.${ext}`);
+        try {
+          const bytes = await readFile(imgPath);
+          res.setHeader('Content-Type', mime);
+          res.setHeader('Content-Length', String(bytes.length));
+          res.end(bytes);
+          return;
+        } catch {
+          // Not found at this extension — try next.
+        }
+      }
+
+      res.status(404).json({ error: 'Image not found' });
+    };
+    run().catch((err: unknown) => {
+      logger.error(`GET /images/:id failed: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: 'Failed to serve image' });
+    });
+  });
+
   // --- Save candidate fields as an editable AcroForm PDF to disk ---
   // Produces <name>.fpdf.acroform.pdf alongside the source PDF.  Fields are
   // left editable so the recipient can fill them in any standard PDF viewer.

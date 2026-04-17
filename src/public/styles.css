@@ -180,6 +180,10 @@ body {
   position: absolute;
 }
 
+.image-wrapper {
+  pointer-events: auto;
+}
+
 .required-marker {
   position: absolute;
   top: 0;

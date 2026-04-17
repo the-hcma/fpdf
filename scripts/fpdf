@@ -107,6 +107,18 @@ _fpdf_clean() {
 }
 
 # Handle built-in script flags before any dependency checks.
+# --yes: non-interactive mode — accept all prompts automatically (used by systemd service).
+_fpdf_yes=0
+_remaining_args=()
+for _arg in "$@"; do
+  if [[ "$_arg" == '--yes' ]]; then
+    _fpdf_yes=1
+  else
+    _remaining_args+=("$_arg")
+  fi
+done
+set -- "${_remaining_args[@]+"${_remaining_args[@]}"}"
+
 case "${1:-}" in
   clean)
     # Always handled in bash — clean must work regardless of node/node_modules state.
@@ -215,8 +227,12 @@ done
 # Check that pnpm is available (node is guaranteed present at this point).
 while ! command -v pnpm &>/dev/null; do
   echo "[fpdf] 'pnpm' is not installed (required)." >&2
-  printf '%s[fpdf] Install pnpm now via '\''npm install -g pnpm'\''? [Y/n] %s' "$q" "$r" >&2
-  read -r reply || { echo >&2; exit 1; }
+  if [[ "$_fpdf_yes" == '1' ]]; then
+    reply='y'
+  else
+    printf '%s[fpdf] Install pnpm now via '\''npm install -g pnpm'\''? [Y/n] %s' "$q" "$r" >&2
+    read -r reply || { echo >&2; exit 1; }
+  fi
   [[ "$reply" =~ ^[Nn] ]] && exit 0
   echo "[fpdf] Installing pnpm…" >&2
   npm install -g pnpm >&2
@@ -225,8 +241,12 @@ done
 # Check that node_modules exists (pnpm install has been run).
 while [ ! -d "$root_dir/node_modules" ]; do
   echo "[fpdf] Dependencies not installed." >&2
-  printf '%s[fpdf] Run '\''pnpm install'\'' now? [Y/n] %s' "$q" "$r" >&2
-  read -r reply || { echo >&2; exit 1; }
+  if [[ "$_fpdf_yes" == '1' ]]; then
+    reply='y'
+  else
+    printf '%s[fpdf] Run '\''pnpm install'\'' now? [Y/n] %s' "$q" "$r" >&2
+    read -r reply || { echo >&2; exit 1; }
+  fi
   [[ "$reply" =~ ^[Nn] ]] && exit 0
   echo "[fpdf] Installing dependencies…" >&2
   if pnpm --dir "$root_dir" install >&2; then
@@ -241,6 +261,10 @@ done
 _node_major=$(node --version | tr -d 'v' | cut -d. -f1)
 while [[ "$_fpdf_node_skip" == '0' && "$_node_major" -lt "$_min_major" ]]; do
   echo "[fpdf] Node $(node --version) is below the required >=v${_min_major}." >&2
+  if [[ "$_fpdf_yes" == '1' ]]; then
+    _fpdf_node_skip=1
+    break
+  fi
   _offer_node_menu 1
   _reload_fnm
   _reload_brew_node
@@ -251,8 +275,12 @@ done
 while [ "$root_dir/package.json" -nt "$root_dir/node_modules" ] || \
       [ "$root_dir/pnpm-lock.yaml" -nt "$root_dir/node_modules" ]; do
   echo "[fpdf] Dependencies may be out of date (package.json or pnpm-lock.yaml has changed since last install)." >&2
-  printf '%s[fpdf] Run pnpm install to update? [Y/n] %s' "$q" "$r" >&2
-  read -r reply || { echo >&2; exit 1; }
+  if [[ "$_fpdf_yes" == '1' ]]; then
+    reply='y'
+  else
+    printf '%s[fpdf] Run pnpm install to update? [Y/n] %s' "$q" "$r" >&2
+    read -r reply || { echo >&2; exit 1; }
+  fi
   [[ "$reply" =~ ^[Nn] ]] && break
   echo "[fpdf] Updating dependencies…" >&2
   if pnpm --dir "$root_dir" install >&2; then

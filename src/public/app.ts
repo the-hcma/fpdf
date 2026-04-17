@@ -1,5 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
-import type { FpdfDocument, PdfPage, PdfField, CandidateField } from '../types.js';
+import type { FpdfDocument, PdfPage, PdfField, CandidateField, PlacedImage } from '../types.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
@@ -733,11 +733,14 @@ function makeFieldInteractive(
     if (overlay) hideSnapGuide(overlay);
     if (!hasDragged) {
       // Click on selected field (no drag): exit edit mode and focus the input.
+      // For image wrappers there is no focusable input — keep the selection so the
+      // user can still drag or resize after clicking.
       const inputEl = wrapper.querySelector<HTMLInputElement | HTMLTextAreaElement>(
         'input[type="text"], textarea',
       );
+      if (!inputEl) return;
       editSelectField(null);
-      if (inputEl) inputEl.focus();
+      inputEl.focus();
       return;
     }
     onMutate();
@@ -815,6 +818,24 @@ function attachResize(
       width = Math.max(MIN_FIELD_SIZE_PT, origPlacement.width - dx);
       if (width === MIN_FIELD_SIZE_PT)
         x = origPlacement.x + origPlacement.width - MIN_FIELD_SIZE_PT;
+    }
+
+    // Lock aspect ratio for image wrappers (aspect ratio stored on wrapper.dataset.aspectRatio).
+    const aspectRatioStr = wrapper.dataset.aspectRatio;
+    if (aspectRatioStr) {
+      const aspect = Number(aspectRatioStr);
+      if (dir === 'n' || dir === 's') {
+        // Height-driven: derive width from height
+        width = Math.max(MIN_FIELD_SIZE_PT, height * aspect);
+      } else {
+        // Width-driven: derive height from width
+        const newH = Math.max(MIN_FIELD_SIZE_PT, width / aspect);
+        if (dir === 'se' || dir === 'sw') {
+          // South edge moved: recalculate y to match the new height
+          y = origPlacement.y - (newH - origPlacement.height);
+        }
+        height = newH;
+      }
     }
 
     field.placement.x = x;
@@ -1169,9 +1190,108 @@ function initEditInteractions(
       ],
     });
 
+    items.push({
+      label: 'Place image here',
+      action: () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/jpeg,image/png';
+        input.addEventListener('change', () => {
+          const file = input.files?.[0];
+          if (!file) return;
+
+          // Detect the natural aspect ratio from the local file before uploading.
+          const aspectRatioPromise = new Promise<number>((resolve) => {
+            const objectUrl = URL.createObjectURL(file);
+            const tempImg = new Image();
+            tempImg.onload = () => {
+              URL.revokeObjectURL(objectUrl);
+              resolve(tempImg.naturalWidth > 0 ? tempImg.naturalWidth / tempImg.naturalHeight : 1);
+            };
+            tempImg.onerror = () => {
+              URL.revokeObjectURL(objectUrl);
+              resolve(1);
+            };
+            tempImg.src = objectUrl;
+          });
+
+          const fd = new FormData();
+          fd.append('image', file);
+          Promise.all([
+            fetch('/images', { method: 'POST', body: fd }).then((r) => {
+              if (!r.ok) throw new Error(`Upload failed: ${String(r.status)}`);
+              return r.json() as Promise<{ id: string; mimeType: 'image/jpeg' | 'image/png' }>;
+            }),
+            aspectRatioPromise,
+          ])
+            .then(([{ id, mimeType }, aspectRatio]) => {
+              const DEFAULT_SIZE = 100;
+              const width = DEFAULT_SIZE;
+              const height = DEFAULT_SIZE / aspectRatio;
+              const xPdf = Math.max(0, clickX / effectiveScale - width / 2);
+              const yPdf = Math.max(0, safePage.heightPt - clickY / effectiveScale - height / 2);
+              const placedImg: PlacedImage = {
+                id,
+                mimeType,
+                placement: { x: xPdf, y: yPdf, width, height },
+              };
+              safePage.images ??= [];
+              safePage.images.push(placedImg);
+              const imgWrapper = buildImageElement(placedImg, safePage, canvasScale, onDirty);
+              safeOverlay.appendChild(imgWrapper);
+              editSelectField(imgWrapper);
+              onDirty();
+            })
+            .catch((err: unknown) => {
+              // eslint-disable-next-line no-console -- no structured logger available in the browser
+              console.error('Failed to place image:', err);
+            });
+        });
+        input.click();
+      },
+    });
+
     items.sort((a, b) => a.label.localeCompare(b.label));
     showContextMenu(items, e.clientX, e.clientY);
   });
+}
+
+function buildImageElement(
+  img: PlacedImage,
+  page: PdfPage,
+  scale: number,
+  onDirty: () => void,
+): HTMLElement {
+  const imgEl = document.createElement('img');
+  imgEl.src = `/images/${img.id}`;
+  imgEl.style.width = '100%';
+  imgEl.style.height = '100%';
+  imgEl.style.display = 'block';
+  imgEl.style.objectFit = 'fill';
+  imgEl.style.pointerEvents = 'none';
+  imgEl.draggable = false;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'field-wrapper image-wrapper';
+  positionElement(wrapper, img, page, scale);
+
+  imgEl.addEventListener('load', () => {
+    if (imgEl.naturalWidth > 0 && imgEl.naturalHeight > 0) {
+      wrapper.dataset.aspectRatio = String(imgEl.naturalWidth / imgEl.naturalHeight);
+    }
+  });
+
+  const onDelete = (): void => {
+    const idx = (page.images ?? []).indexOf(img);
+    if (idx !== -1) page.images?.splice(idx, 1);
+    if (editSelectedWrapper === wrapper) editSelectField(null);
+    wrapper.remove();
+    onDirty();
+  };
+
+  makeFieldInteractive(wrapper, img, page, scale, onDirty, onDelete);
+  wrapper.appendChild(imgEl);
+  return wrapper;
 }
 
 function buildFieldElement(
@@ -1400,6 +1520,10 @@ async function renderPage(
     overlay.appendChild(fieldWrapper);
     const inputEl = fieldWrapper.querySelector<HTMLElement>('[data-max-font-size]');
     if (inputEl) pendingFitEls.push(inputEl);
+  }
+  for (const img of docPage.images ?? []) {
+    const imgWrapper = buildImageElement(img, docPage, scale, onDirty);
+    overlay.appendChild(imgWrapper);
   }
 
   const pageLabel = document.createElement('div');

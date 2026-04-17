@@ -9,7 +9,7 @@ Type=simple
 # Assumes fpdf is located in ~/work/ai/fpdf
 # Adjust the path below if your repository is in a different location
 WorkingDirectory=@@REPO_DIR@@
-ExecStart=@@REPO_DIR@@/scripts/fpdf --listen-all --port 8002
+ExecStart=@@REPO_DIR@@/scripts/fpdf --yes --listen-all --port 8002
 Restart=always
 RestartSec=5
 StandardOutput=append:%h/scratch/fpdf/fpdf.log

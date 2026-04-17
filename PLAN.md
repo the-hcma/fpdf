@@ -102,6 +102,18 @@ fpdf/
           "fontSize": 11
         }
       ],
+      "images": [
+        {
+          "id": "cea956ea-5cf2-4bac-999e-b69b26ec0e31",
+          "mimeType": "image/png",
+          "placement": {
+            "x": 200.0,
+            "y": 600.0,
+            "width": 150.0,
+            "height": 75.0
+          }
+        }
+      ],
       "textBlocks": [
         {
           "text": "Patient Information",
@@ -152,8 +164,13 @@ fpdf/
 - `value` is what the user fills in (string for text/select, boolean for checkboxes)
 - The file is human-editable: a user can fill in `value` fields directly in a text editor
 
-### textBlocks notes
-- `textBlocks` contains static text extracted from the page content stream — section headers, field labels, instructions — anything drawn as PDF text rather than an AcroForm widget
+### images notes
+- `images` is an optional array of user-placed images (e.g. signatures) on each page. Omitted when the page has no placed images.
+- Each entry has an `id` (UUID matching a file in `.fpdf-images/<uuid>.<jpg|png>` alongside the `.fpdf.json`), `mimeType` (`image/jpeg` or `image/png`), and `placement` in PDF coordinate space (same origin and units as `fields`).
+- Image bytes are stored on disk next to the `.fpdf.json` rather than embedded in the JSON. On `fpdf export` / `POST /save-acroform`, the bytes are read from disk and embedded directly into the output PDF via `pdf-lib`, so the final PDF is fully self-contained.
+- The image directory is `<json-dir>/.fpdf-images/`. It must travel alongside the `.fpdf.json` for the session to be resumable. For upload sessions the directory lives under `os.tmpdir()/fpdf-<sessionId>/`.
+
+### textBlocks notes — section headers, field labels, instructions — anything drawn as PDF text rather than an AcroForm widget
 - Each block is a logical line: adjacent `TextItem`s with the same `fontName`, fontSize within 0.5pt, and y-position within half the font size are merged into one block
 - `placement` uses the same PDF coordinate space (bottom-left origin) as `fields` — use proximity to associate a label block with nearby form fields
 - `fontSize` is in points, derived from the rendered glyph height as reported by `pdfjs-dist`
@@ -431,3 +448,7 @@ Each milestone is implemented as exactly one branch in a Graphite stack (`gt cre
 | fix | `04-16-fix_wss_support_behind_https_nginx_proxy_port_conflict_restart_dep_staleness_check` | **WSS + port-conflict + dep-staleness fixes (PR #224):** `app.ts`/`pick.ts` use `wss:` protocol when page is served over HTTPS (nginx reverse-proxy). `cli.ts` adds `startServerRestarting()`: detects EADDRINUSE, identifies an existing fpdf process on the port via `ss`/`lsof`, prompts to stop it with `SIGTERM`, waits for exit, then retries; used for both `fill` and file-picker modes. `server.ts` silences the WSS re-emission of the httpServer `EADDRINUSE` error to prevent an unhandled-error crash. `scripts/fpdf` staleness check now watches both `package.json` and `pnpm-lock.yaml`. | ✅ PR #224 |
 | fix | `04-16-fix_disable_auto-shutdown_in_service_mode_cleanup_per-session_temp_dirs_on_disconnect` | **Sync, rotation, atomic-write, and canvas-export fixes (PR #225):** `server.ts` — `close()` waits for the FSWatcher `'close'` event before HTTP/WS teardown (prevents EMFILE); `writeJsonAtomic()` writes to `.tmp` then `rename(2)` so inotify never fires on a partial write (fixes JSON parse error at position 4096). `analyzer.ts` — stores visual (post-rotation) dims in `PdfPage.widthPt`/`heightPt`; `convertCandidateToVisual()` maps auto-detected candidate coords from MediaBox→visual space for /Rotate 90/180/270 pages. `exporter.ts` — `toRawRect()` handles all four rotation values. `types.ts` — adds `rotationDeg?: 0\|90\|180\|270` to `PdfPage`. `app.ts` — `/export-canvas` body now sends the live in-memory doc (not just page images) so user-created fields are included; removes debug `console.log`. Tests: `settle()` helper (17 call sites of `setTimeout(50)`) removed; three `server.test.ts` patterns replaced with `vi.waitFor` / WS close-handshake / ack-based ordering; 50+ new tests for rotation and canvas-export paths. | ✅ PR #225 |
 | 16 | `docs/systemd-linger` | Systemd Linger support: configuration guide for persistent background server on Linux via symlinked systemd user units (`scripts/systemd/fpdf.service`); loginctl linger enablement; `/health` endpoint for liveness checks | ✅ |
+| 17 | `place-image/types` | **Placed images — types:** `PlacedImage` interface (`id`, `mimeType`, `placement`); `images?: PlacedImage[]` added to `PdfPage` | ✅ PR #240 |
+| 17.1 | `place-image/server` | **Placed images — server:** `POST /images` multipart endpoint: Busboy, 20 MB limit, magic-byte JPEG/PNG validation, stores to `<json-dir>/.fpdf-images/<uuid>.<ext>`; `GET /images/:id` UUID-validated serve; absolute path in stored-image log message | ✅ PR #241 |
+| 17.2 | `04-17-feat_exporter_stamp_placed_images_into_exported_pdfs` | **Placed images — exporter:** `drawPlacedImages()` reads image bytes from `.fpdf-images/` and embeds them via `pdf-lib` into the exported PDF; `exportPdf` and `exportFromImages` accept `imagesDir?` option; all server export call-sites pass the images directory | ✅ PR #242 |
+| 17.3 | `04-17-feat_frontend_place_image_overlay_with_resize_and_context_menu` | **Placed images — frontend:** "Place image here" context menu item; file picker → `POST /images` → overlay at click location; aspect-ratio-preserving initial placement (detected via `URL.createObjectURL` before upload); 8-handle resize with aspect-ratio lock; `pointer-events: none` on `<img>` so move handle receives clicks; `.image-wrapper { pointer-events: auto }` to fix re-selection after deselect; move-handle `pointerup` no-op (no focus hand-off) for image wrappers | ✅ PR #243 |

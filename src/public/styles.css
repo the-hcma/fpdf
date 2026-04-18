@@ -462,7 +462,7 @@ body {
   border: none;
   background: transparent;
   cursor: pointer;
-  font-size: 13px;
+  font-size: 16px;
   color: var(--color-button);
   white-space: nowrap;
 }
@@ -479,12 +479,12 @@ body {
 }
 
 .menu-hint {
-  font-size: 11px;
+  font-size: 14px;
   opacity: 0.55;
 }
 
 .submenu-arrow {
-  font-size: 9px;
+  font-size: 11px;
   opacity: 0.55;
 }
 
@@ -504,7 +504,7 @@ body {
 }
 
 .field-name-editor input {
-  font-size: 13px;
+  font-size: 16px;
   padding: 3px 6px;
   border: 1px solid var(--border-toolbar);
   border-radius: 3px;
@@ -515,7 +515,7 @@ body {
 }
 
 .field-name-editor button {
-  font-size: 13px;
+  font-size: 16px;
   padding: 3px 8px;
   border: 1px solid var(--border-button);
   border-radius: 3px;

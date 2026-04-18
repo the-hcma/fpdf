@@ -168,6 +168,62 @@ body {
   user-select: none;
 }
 
+.page-exclude-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 6px 4px;
+}
+
+.page-exclude-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-page-label);
+  cursor: pointer;
+  user-select: none;
+  padding: 0;
+}
+
+.page-exclude-all-after {
+  display: inline-flex;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: #c33;
+  background: none;
+  border: 1px solid #c33;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.page-exclude-all-after:disabled {
+  color: #666;
+  border-color: #666;
+  cursor: default;
+  opacity: 0.45;
+}
+
+.page-exclude-all-after[data-all-excluded='true'] {
+  color: #3a3;
+  border-color: #3a3;
+}
+
+.page-exclude-all-after[data-all-excluded='true']:hover {
+  background: rgba(50, 170, 50, 0.1);
+}
+
+.page-exclude-all-after:hover {
+  background: rgba(200, 50, 50, 0.1);
+}
+
+.page-wrapper.page-excluded {
+  opacity: 0.35;
+  outline: 2px dashed #e55;
+}
+
 /* ── Overlay ── */
 
 .overlay {

@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist';
 import type { FpdfDocument, PdfPage, PdfField, CandidateField, PlacedImage } from '../types.js';
+import { getExcludeAllAfterTarget, applyExcludeAfter } from '../exclude-pages.js';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.mjs';
 
@@ -1483,6 +1484,7 @@ function buildCandidateFieldElement(
 async function renderPage(
   pdfPage: pdfjsLib.PDFPageProxy,
   docPage: PdfPage,
+  docPages: PdfPage[],
   container: HTMLElement,
   onDirty: () => void,
 ): Promise<void> {
@@ -1530,13 +1532,103 @@ async function renderPage(
   pageLabel.className = 'page-type-label';
   pageLabel.textContent = `Page ${String(docPage.pageNumber)} · ${humanPageType(docPage.pageType)}`;
 
+  const excludeLabel = document.createElement('label');
+  excludeLabel.className = 'page-exclude-toggle';
+  const excludeCheckbox = document.createElement('input');
+  excludeCheckbox.type = 'checkbox';
+  excludeCheckbox.id = `exclude-page-${String(docPage.pageNumber)}`;
+  excludeCheckbox.checked = docPage.excluded ?? false;
+  excludeLabel.appendChild(excludeCheckbox);
+  excludeLabel.append(' Exclude from export');
+
+  const excludeAllAfterBtn = document.createElement('button');
+  excludeAllAfterBtn.className = 'page-exclude-all-after';
+  excludeAllAfterBtn.id = `exclude-all-after-${String(docPage.pageNumber)}`;
+  excludeAllAfterBtn.type = 'button';
+  excludeAllAfterBtn.textContent = '+ all after';
+  excludeAllAfterBtn.disabled = !(docPage.excluded ?? false);
+
+  const excludeRow = document.createElement('div');
+  excludeRow.className = 'page-exclude-row';
+  excludeRow.appendChild(excludeLabel);
+  excludeRow.appendChild(excludeAllAfterBtn);
+
   const wrapper = document.createElement('div');
-  wrapper.className = 'page-wrapper';
+  wrapper.className = docPage.excluded ? 'page-wrapper page-excluded' : 'page-wrapper';
+  wrapper.dataset.pageNumber = String(docPage.pageNumber);
   wrapper.style.setProperty('--print-width', `${String(docPage.widthPt / 72)}in`);
   wrapper.style.setProperty('--print-height', `${String(docPage.heightPt / 72)}in`);
   wrapper.appendChild(canvas);
   wrapper.appendChild(overlay);
+
+  // Recomputes this button's text (red vs green) and data-all-excluded attribute
+  // based on whether all subsequent pages are already excluded.
+  // No-op when the checkbox is unchecked (button is disabled and gray).
+  function updateExcludeAllAfterBtn(): void {
+    if (!excludeCheckbox.checked) return;
+    const allWrappers = container.querySelectorAll<HTMLElement>('[data-page-number]');
+    const subsequent = Array.from(allWrappers).filter(
+      (el) => Number(el.dataset.pageNumber) > docPage.pageNumber,
+    );
+    if (subsequent.length === 0) return;
+    const allExcluded = subsequent.every((el) => {
+      const num = Number(el.dataset.pageNumber);
+      const cb = container.querySelector<HTMLInputElement>(`#exclude-page-${String(num)}`);
+      return cb?.checked ?? false;
+    });
+    excludeAllAfterBtn.textContent = allExcluded ? '\u2212 all after' : '+ all after';
+    excludeAllAfterBtn.dataset.allExcluded = String(allExcluded);
+  }
+
+  excludeCheckbox.addEventListener('change', () => {
+    docPage.excluded = excludeCheckbox.checked;
+    wrapper.classList.toggle('page-excluded', excludeCheckbox.checked);
+    excludeAllAfterBtn.disabled = !excludeCheckbox.checked;
+    if (!excludeCheckbox.checked) {
+      excludeAllAfterBtn.textContent = '+ all after';
+      delete excludeAllAfterBtn.dataset.allExcluded;
+    } else {
+      updateExcludeAllAfterBtn();
+    }
+    onDirty();
+    // Notify all other pages' buttons to refresh their red/green state.
+    container.dispatchEvent(new CustomEvent('exclude-changed'));
+  });
+
+  // Keep this button's appearance in sync when any page's checkbox changes.
+  container.addEventListener('exclude-changed', () => {
+    updateExcludeAllAfterBtn();
+  });
+
+  excludeAllAfterBtn.addEventListener('click', () => {
+    // Re-compute direction from live docPages state: if any subsequent page is
+    // not excluded → exclude them all; if all are excluded → un-exclude them all.
+    const shouldExclude = getExcludeAllAfterTarget(docPage.pageNumber, docPages);
+    // Mutate docPage.excluded on changed pages directly (JSON state sync).
+    const changed = applyExcludeAfter(docPage.pageNumber, docPages, shouldExclude);
+    // Sync DOM visuals for each changed page.
+    for (const num of changed) {
+      const cb = container.querySelector<HTMLInputElement>(`#exclude-page-${String(num)}`);
+      const pageWrapper = container.querySelector<HTMLElement>(
+        `[data-page-number="${String(num)}"]`,
+      );
+      const pageBtn = container.querySelector<HTMLButtonElement>(
+        `#exclude-all-after-${String(num)}`,
+      );
+      if (cb) cb.checked = shouldExclude;
+      pageWrapper?.classList.toggle('page-excluded', shouldExclude);
+      if (pageBtn) {
+        pageBtn.disabled = !shouldExclude;
+        if (!shouldExclude) pageBtn.textContent = '+ all after';
+      }
+    }
+    onDirty();
+    // Refresh all buttons' red/green state (including this one).
+    container.dispatchEvent(new CustomEvent('exclude-changed'));
+  });
+
   container.appendChild(pageLabel);
+  container.appendChild(excludeRow);
   container.appendChild(wrapper);
 
   // Now that the elements are in the document and have non-zero dimensions,
@@ -1885,8 +1977,11 @@ async function main(): Promise<void> {
     const pdfPage = await pdfDoc.getPage(i);
     const docPage = fpdfDoc.pages.find((p) => p.pageNumber === i);
     if (!docPage) continue;
-    await renderPage(pdfPage, docPage, pagesContainer, onDirty);
+    await renderPage(pdfPage, docPage, fpdfDoc.pages, pagesContainer, onDirty);
   }
+  // Initialise all "all after" buttons' red/green state now that every page
+  // is in the DOM (they rely on querying subsequent page checkboxes).
+  pagesContainer.dispatchEvent(new CustomEvent('exclude-changed'));
 
   initTabOrder(fpdfDoc, pagesContainer);
 

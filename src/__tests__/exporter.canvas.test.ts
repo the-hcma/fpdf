@@ -270,3 +270,90 @@ describe('exportFromImages — placed images', () => {
     expect(result.getPageCount()).toBe(1);
   });
 });
+
+describe('exportFromImages — page exclusion', () => {
+  it('omits an excluded page from the output', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: '',
+        pdfFilename: 'test.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 2,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+          excluded: true,
+        },
+        {
+          pageNumber: 2,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const pages: RenderedPage[] = [
+      { jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 },
+      { jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 },
+    ];
+    const bytes = await exportFromImages(pages, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+  });
+
+  it('keeps all pages when none are excluded', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: '',
+        pdfFilename: 'test.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 2,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+        {
+          pageNumber: 2,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const pages: RenderedPage[] = [
+      { jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 },
+      { jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 },
+    ];
+    const bytes = await exportFromImages(pages, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(2);
+  });
+});

@@ -128,6 +128,20 @@ export class ExportError extends Error {
 }
 
 /**
+ * Remove pages marked `excluded: true` from `pdfDoc`, in reverse order so
+ * earlier page indices remain valid during removal.
+ */
+function removeExcludedPages(pdfDoc: PDFDocument, doc: FpdfDocument): void {
+  const indices = doc.pages
+    .filter((p) => p.excluded)
+    .map((p) => p.pageNumber - 1)
+    .sort((a, b) => b - a);
+  for (const idx of indices) {
+    pdfDoc.removePage(idx);
+  }
+}
+
+/**
  * Stamp all placed images for every page onto `pdfDoc`.  Missing image files
  * are skipped with a warning so a missing upload never blocks the export.
  */
@@ -287,6 +301,7 @@ export async function exportPdf(
     if (options.imagesDir !== undefined) {
       await drawPlacedImages(pdfDoc, doc, options.imagesDir);
     }
+    removeExcludedPages(pdfDoc, doc);
     return pdfDoc.save({ useObjectStreams: false, updateFieldAppearances: false });
   } else {
     // ── Pure AcroForm PDF ─────────────────────────────────────────────────────
@@ -315,6 +330,7 @@ export async function exportPdf(
   if (options.imagesDir !== undefined) {
     await drawPlacedImages(pdfDoc, doc, options.imagesDir);
   }
+  removeExcludedPages(pdfDoc, doc);
   return pdfDoc.save({ updateFieldAppearances: false });
 }
 
@@ -1084,5 +1100,6 @@ export async function exportFromImages(
     await drawPlacedImages(pdfDoc, doc, imagesDir);
   }
 
+  removeExcludedPages(pdfDoc, doc);
   return pdfDoc.save();
 }

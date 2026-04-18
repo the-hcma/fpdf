@@ -204,6 +204,11 @@ export interface PdfPage {
    * the image is drawn into the page content stream at the specified placement.
    */
   images?: PlacedImage[];
+  /**
+   * When true, this page is omitted from the exported PDF.
+   * Set by the user via the per-page checkbox in the UI.
+   */
+  excluded?: boolean;
 }
 
 export interface FpdfMetadata {

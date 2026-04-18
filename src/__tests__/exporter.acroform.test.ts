@@ -631,3 +631,92 @@ describe('exportPdf — placed images', () => {
     expect(result.getPageCount()).toBe(1);
   });
 });
+
+describe('exportPdf — page exclusion', () => {
+  let twoPdfPath: string;
+
+  beforeAll(async () => {
+    const twoPageBytes = await makePdfBytes((doc) => {
+      doc.addPage([612, 792]);
+      doc.addPage([612, 792]);
+    });
+    twoPdfPath = await writeTempPdf('two-pages.pdf', twoPageBytes, 'fpdf-exclusion-tests');
+  });
+
+  it('omits an excluded page from the exported PDF', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: '',
+        pdfFilename: 'two-pages.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 2,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+          excluded: true,
+        },
+        {
+          pageNumber: 2,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const bytes = await exportPdf(twoPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(1);
+  });
+
+  it('keeps all pages when none are excluded', async () => {
+    const doc: FpdfDocument = {
+      metadata: {
+        version: '1.0',
+        originalPdf: '',
+        pdfFilename: 'two-pages.pdf',
+        pdfHash: 'sha256:abc',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+        pageCount: 2,
+        pdfKind: 'no-acroform',
+      },
+      pages: [
+        {
+          pageNumber: 1,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+        {
+          pageNumber: 2,
+          widthPt: 612,
+          heightPt: 792,
+          pageType: 'vector' as const,
+          fields: [],
+          candidateFields: [],
+          textBlocks: [],
+        },
+      ],
+    };
+    const bytes = await exportPdf(twoPdfPath, doc);
+    const result = await PDFDocument.load(bytes);
+    expect(result.getPageCount()).toBe(2);
+  });
+});

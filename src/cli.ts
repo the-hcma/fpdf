@@ -213,12 +213,12 @@ export function buildProgram(): Command {
             // Explicit --json: load the specified file; error if it is missing.
             const raw = await readFile(jsonPath, 'utf-8');
             doc = JSON.parse(raw) as FpdfDocument;
-            logger.info(`Resumed session from ${jsonPath}`);
+            logger.info(`Resumed session from '${jsonPath}'`);
           } else if (opts.fresh) {
             // --fresh: skip any existing session and re-analyze unconditionally.
             doc = await analyzePdf(pdfPath);
             await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-            logger.info(`Fresh analysis of ${pdfPath} → ${jsonPath}`);
+            logger.info(`Fresh analysis of '${pdfPath}' → '${jsonPath}'`);
           } else {
             // Auto-detect: load the default .fpdf.json if it exists, otherwise analyze.
             let raw: string | null = null;
@@ -230,18 +230,18 @@ export function buildProgram(): Command {
             if (raw !== null) {
               const loaded = JSON.parse(raw) as FpdfDocument;
               if (needsRadioMigration(loaded)) {
-                logger.info(`Migrating ${jsonPath} (radio field schema updated) — re-analyzing…`);
+                logger.info(`Migrating '${jsonPath}' (radio field schema updated) — re-analyzing…`);
                 doc = await migrateDoc(pdfPath, loaded);
                 await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-                logger.info(`Migration complete → ${jsonPath}`);
+                logger.info(`Migration complete → '${jsonPath}'`);
               } else {
                 doc = loaded;
-                logger.info(`Resumed session from ${jsonPath}`);
+                logger.info(`Resumed session from '${jsonPath}'`);
               }
             } else {
               doc = await analyzePdf(pdfPath);
               await writeFile(jsonPath, JSON.stringify(doc, null, 2), 'utf-8');
-              logger.info(`Analyzed ${pdfPath} → ${jsonPath}`);
+              logger.info(`Analyzed '${pdfPath}' → '${jsonPath}'`);
             }
           }
 
@@ -320,7 +320,7 @@ export function buildProgram(): Command {
           `${path.basename(file, path.extname(file))}.fpdf.json`,
         );
         await writeFile(outPath, JSON.stringify(doc, null, 2), 'utf-8');
-        logger.info(`Wrote ${outPath}`);
+        logger.info(`Wrote '${outPath}'`);
       };
       run().catch((err: unknown) => {
         const msg = err instanceof AnalyzerError ? err.message : String(err);
@@ -391,7 +391,7 @@ export function buildProgram(): Command {
             );
         const filled = await exportPdf(doc.metadata.originalPdf, doc);
         await writeFile(outPath, filled);
-        logger.info(`Wrote ${outPath}`);
+        logger.info(`Wrote '${outPath}'`);
       };
       run().catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
@@ -461,7 +461,7 @@ export function buildProgram(): Command {
 
         const filled = await exportPdf(pdfPath, doc, { readOnly: false });
         await writeFile(outPath, filled);
-        logger.info(`Wrote ${outPath}`);
+        logger.info(`Wrote '${outPath}'`);
       };
       run().catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);

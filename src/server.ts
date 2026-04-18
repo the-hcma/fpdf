@@ -348,7 +348,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       const imgPath = path.join(imgDir, `${id}.${ext}`);
       await writeFile(imgPath, imgData);
 
-      logger.info(`Stored placed image ${imgPath} (${String(imgData.length)} bytes)`);
+      logger.info(`Stored placed image '${imgPath}' (${String(imgData.length)} bytes)`);
       res.json({ id, mimeType });
     };
     run().catch((err: unknown) => {
@@ -431,7 +431,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         const base = ctx.pdfPath.replace(/\.[^.]+$/, '');
         const outPath = `${base}.fpdf.acroform.pdf`;
         await writeFile(outPath, filled);
-        logger.info(`Saved AcroForm PDF → ${outPath}`);
+        logger.info(`Saved AcroForm PDF → '${outPath}'`);
         res.json({ ok: true, path: outPath });
       }
     };
@@ -949,7 +949,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
             uploaded: isUploadSession,
           }),
         );
-        logger.debug(`Saved ${activeJsonPath}`);
+        logger.debug(`Saved '${activeJsonPath}'`);
       };
 
       handleMessage().catch((err: unknown) => {
@@ -998,7 +998,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         lastServerWriteContent = null;
         liveDoc = JSON.parse(text) as FpdfDocument;
         broadcast(JSON.stringify({ type: 'docReload', doc: liveDoc }));
-        logger.debug(`Reloaded liveDoc from ${jsonPath}`);
+        logger.debug(`Reloaded liveDoc from '${jsonPath}'`);
       };
       reload().catch((err: unknown) => {
         logger.error(`JSON reload error: ${err instanceof Error ? err.message : String(err)}`);

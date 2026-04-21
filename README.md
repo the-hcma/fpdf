@@ -126,6 +126,14 @@ If this happens, the service will show a `failed` status. To recover:
 
 ## Installation
 
+You can run `fpdf` directly without installing it globally using `npx`:
+
+```bash
+npx @the-hcma/fpdf fill form.pdf
+```
+
+Alternatively, install it globally to use the `fpdf` command directly:
+
 ```bash
 npm install -g @the-hcma/fpdf
 # or
@@ -135,6 +143,8 @@ pnpm add -g @the-hcma/fpdf
 To build from source instead, see the [Quickstart](#quickstart-from-source).
 
 ## Usage
+
+If you used `npx` above, simply replace `fpdf` with `npx @the-hcma/fpdf` in the commands below.
 
 ```bash
 # Start an interactive fill session (auto-resumes from .fpdf.json if one exists)

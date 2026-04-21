@@ -290,7 +290,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
         truncated: boolean;
       }>((resolve, reject) => {
         const bb = Busboy({
-          headers: req.headers as Record<string, string>,
+          headers: req.headers,
           limits: { files: 1, fileSize: 20 * 1024 * 1024 },
         });
 
@@ -644,7 +644,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
         const uploadedJsonContent = await new Promise<string | null>((resolve, reject) => {
           const bb = Busboy({
-            headers: req.headers as Record<string, string>,
+            headers: req.headers,
             limits: { files: 2, fileSize: 100 * 1024 * 1024 },
           });
 

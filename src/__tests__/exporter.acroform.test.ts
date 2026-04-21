@@ -192,7 +192,7 @@ describe('exportPdf', () => {
   it('falls back to empty string when a boolean value is passed to a text field', async () => {
     // Covers the `typeof value === 'string' ? value : ''` false branch in setText.
     // pdf-lib returns undefined for an empty field, so we just verify it doesn't throw.
-    const doc = makeDoc([{ name: 'firstName', type: 'text', value: false as unknown as string }]);
+    const doc = makeDoc([{ name: 'firstName', type: 'text', value: false }]);
     await expect(exportPdf(textPdfPath, doc)).resolves.toBeInstanceOf(Uint8Array);
   });
 

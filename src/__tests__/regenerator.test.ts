@@ -104,7 +104,7 @@ async function makeXfaHybridPdfBytes(setup: (doc: PDFDocument) => void): Promise
     // Existing AcroForm from setup() — add XFA key to it.
     const resolved =
       acroFormEntry instanceof Object && 'objectNumber' in acroFormEntry
-        ? doc.context.lookup(acroFormEntry as Parameters<typeof doc.context.lookup>[0])
+        ? doc.context.lookup(acroFormEntry)
         : acroFormEntry;
     if (resolved && typeof resolved === 'object' && 'set' in resolved) {
       (resolved as { set: (k: unknown, v: unknown) => void }).set(

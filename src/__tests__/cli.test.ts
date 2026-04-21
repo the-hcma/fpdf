@@ -41,7 +41,7 @@ vi.mock('node:readline', () => ({
       cb('');
     }),
     close: vi.fn(),
-  } as unknown as RlInterface),
+  }),
 }));
 
 vi.mock('node:fs/promises', () => ({
@@ -142,7 +142,7 @@ describe('CLI program structure', () => {
       const { exportPdf } = await import('../exporter.js');
       const { readFile, writeFile } = await import('node:fs/promises');
       const filledBytes = new Uint8Array([37, 80, 68, 70]); // %PDF
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc));
       vi.mocked(exportPdf).mockResolvedValueOnce(filledBytes);
 
       const program = buildProgram();
@@ -161,7 +161,7 @@ describe('CLI program structure', () => {
     it('respects the --output flag', async () => {
       const { exportPdf } = await import('../exporter.js');
       const { readFile, writeFile } = await import('node:fs/promises');
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc));
       vi.mocked(exportPdf).mockResolvedValueOnce(new Uint8Array());
 
       const program = buildProgram();
@@ -174,7 +174,7 @@ describe('CLI program structure', () => {
     it('logs an error and exits when exportPdf rejects', async () => {
       const { exportPdf } = await import('../exporter.js');
       const { readFile } = await import('node:fs/promises');
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc));
       vi.mocked(exportPdf).mockRejectedValue(new Error('pdf locked'));
 
       const program = buildProgram();
@@ -188,7 +188,7 @@ describe('CLI program structure', () => {
     it('logs a stringified non-Error value when export rejects with a non-Error', async () => {
       const { exportPdf } = await import('../exporter.js');
       const { readFile } = await import('node:fs/promises');
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc));
       vi.mocked(exportPdf).mockRejectedValue('disk full');
 
       const program = buildProgram();
@@ -270,7 +270,7 @@ describe('CLI program structure', () => {
         },
         pages: [],
       };
-      vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc));
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
@@ -307,7 +307,7 @@ describe('CLI program structure', () => {
         },
         pages: [],
       };
-      vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(mockDoc));
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
         networkUrls: ['http://127.0.0.1:12345'],
@@ -345,7 +345,7 @@ describe('CLI program structure', () => {
         pages: [],
       };
       // readFile would succeed (existing json) but --fresh should skip it entirely
-      vi.mocked(readFile).mockResolvedValue(JSON.stringify(freshDoc) as never);
+      vi.mocked(readFile).mockResolvedValue(JSON.stringify(freshDoc));
       vi.mocked(analyzePdf).mockResolvedValue(freshDoc);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
@@ -649,7 +649,7 @@ describe('CLI program structure', () => {
         ],
       };
 
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(legacyDoc) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(legacyDoc));
       vi.mocked(analyzePdf).mockResolvedValue(freshDoc as never);
       vi.mocked(startServer).mockResolvedValue({
         url: 'http://127.0.0.1:12345',
@@ -883,11 +883,9 @@ describe('CLI program structure', () => {
       };
 
       vi.mocked(readFile)
-        .mockResolvedValueOnce(JSON.stringify(docWithFields) as never)
-        .mockResolvedValueOnce(Buffer.from('%PDF-1.4') as never);
-      (PDFDocument as unknown as { load: ReturnType<typeof vi.fn> }).load.mockResolvedValue(
-        {} as never,
-      );
+        .mockResolvedValueOnce(JSON.stringify(docWithFields))
+        .mockResolvedValueOnce(Buffer.from('%PDF-1.4'));
+      (PDFDocument as unknown as { load: ReturnType<typeof vi.fn> }).load.mockResolvedValue({});
       vi.mocked(getXfaDatasetsInfo).mockReturnValue(null);
 
       const stdoutSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
@@ -930,11 +928,9 @@ describe('CLI program structure', () => {
       };
 
       vi.mocked(readFile)
-        .mockResolvedValueOnce(JSON.stringify(simpleDoc) as never)
-        .mockResolvedValueOnce(Buffer.from('%PDF-1.4') as never);
-      (PDFDocument as unknown as { load: ReturnType<typeof vi.fn> }).load.mockResolvedValue(
-        {} as never,
-      );
+        .mockResolvedValueOnce(JSON.stringify(simpleDoc))
+        .mockResolvedValueOnce(Buffer.from('%PDF-1.4'));
+      (PDFDocument as unknown as { load: ReturnType<typeof vi.fn> }).load.mockResolvedValue({});
       vi.mocked(getXfaDatasetsInfo).mockReturnValue({
         ref: {} as never,
         xml: '<datasets><firstName/></datasets>',
@@ -1081,7 +1077,7 @@ describe('CLI program structure', () => {
       const readline = await import('node:readline');
 
       vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(mockDoc));
       vi.mocked(readline.createInterface).mockReturnValue({
         question: vi.fn((_p: unknown, cb: (a: string) => void) => {
           cb('');
@@ -1141,7 +1137,7 @@ describe('CLI program structure', () => {
       };
 
       vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(docWithValues) as never);
+      vi.mocked(readFile).mockResolvedValueOnce(JSON.stringify(docWithValues));
       vi.mocked(readline.createInterface).mockReturnValue({
         question: vi.fn((_p: unknown, cb: (a: string) => void) => {
           cb('n');

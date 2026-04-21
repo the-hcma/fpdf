@@ -317,6 +317,30 @@ describe('exportPdf', () => {
     const result = await PDFDocument.load(bytes);
     expect(result.getForm().getTextField('narrow').getText()).toBe(value);
   });
+
+  it('forces black font color when the original /DA contains a non-black colour operator', async () => {
+    // Create a PDF whose text field /DA has a blue colour (`0 0 1 rg`).
+    const blueBytes = await makePdfBytes((doc) => {
+      const page = doc.addPage([612, 792]);
+      const form = doc.getForm();
+      const tf = form.createTextField('colorField');
+      tf.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
+      tf.acroField.setDefaultAppearance('/Helv 10 Tf 0 0 1 rg');
+    });
+    const bluePath = await writeTempPdf('blue-da.pdf', blueBytes, 'fpdf-exporter-tests');
+
+    const doc = makeDoc([{ name: 'colorField', type: 'text', value: 'Hello' }]);
+    doc.metadata.originalPdf = bluePath;
+
+    const bytes = await exportPdf(bluePath, doc);
+    const result = await PDFDocument.load(bytes);
+    const da = result.getForm().getTextField('colorField').acroField.getDefaultAppearance();
+    expect(da).toBeDefined();
+    // The colour portion must be normalised to `0 g` (black grayscale) — the
+    // original `0 0 1 rg` (blue) must not appear in the output /DA.
+    expect(da).not.toContain('0 0 1 rg');
+    expect(da).toContain('0 g');
+  });
 });
 
 describe('encrypted PDF export', () => {

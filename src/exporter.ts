@@ -839,6 +839,33 @@ function applyNonDefaultFontAppearances(
 }
 
 /**
+ * Rewrite the Default Appearance (/DA) entry of a text field so the
+ * non-stroking colour is black.
+ *
+ * Many real-world forms (e.g. Cigna) embed a coloured fill operator in /DA
+ * (e.g. `0 0.39 1 rg` for Cigna blue).  pdf-lib copies this operator verbatim
+ * into every generated appearance stream, making all filled text appear in the
+ * original colour instead of black.  We normalise the colour to `0 g` (black
+ * grayscale) before appearances are regenerated.
+ *
+ * Operators handled (non-stroking / fill only):
+ *   n n n n k  (CMYK)  →  0 g
+ *   n n n rg   (RGB)   →  0 g
+ *   n g        (gray)  →  0 g  (no-op when already `0 g`)
+ */
+function forceBlackDA(field: PDFTextField): void {
+  const da = field.acroField.getDefaultAppearance();
+  if (da === undefined) return;
+  const patched = da
+    .replace(/[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+k(?=\s|$)/g, '0 g')
+    .replace(/[\d.]+\s+[\d.]+\s+[\d.]+\s+rg(?=\s|$)/g, '0 g')
+    .replace(/[\d.]+\s+g(?=\s|$)/g, '0 g');
+  if (patched !== da) {
+    field.acroField.setDefaultAppearance(patched);
+  }
+}
+
+/**
  * Write field values into the AcroForm widgets of `pdfDoc`.
  *
  * @param pdfKind  Document-level PDF kind.  Radio buttons in XFA hybrid PDFs
@@ -873,6 +900,10 @@ function writeAcroFormValues(
         if (alignment !== undefined) pdfField.setAlignment(alignment);
         const fontSize = fontSizes.get(name);
         if (fontSize !== undefined) pdfField.setFontSize(fontSize);
+        // Force black text: strip any non-black colour operator from /DA so
+        // the generated appearance stream renders text in black, not the
+        // original form colour (e.g. Cigna blue).
+        forceBlackDA(pdfField);
         // Disable scrolling so viewers don't render a scroll bar — but only
         // when the text actually fits at the computed font size.  For fields
         // where the text overflows even at the minimum size, leave scrolling
@@ -1024,6 +1055,8 @@ function writeOrphanWidgetValues(
               // Not all widgets support scrolling flags — safe to skip.
             }
           }
+          // Force black text: same colour normalisation as writeAcroFormValues.
+          forceBlackDA(textField);
           textField.updateAppearances(fieldFonts.get(name) ?? helv);
         } else if (ft === '/Btn') {
           // ── Checkbox ────────────────────────────────────────────────────

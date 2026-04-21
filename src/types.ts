@@ -244,3 +244,10 @@ export interface BrowseResponse {
 export interface UiCapabilitiesResponse {
   canBrowseServerFiles: boolean;
 }
+
+export interface VersionResponse {
+  /** Semver version string from package.json, e.g. "0.1.0". */
+  version: string;
+  /** Full git commit hash of the running build, or null when not available (e.g. dev/test). */
+  commitHash: string | null;
+}

@@ -115,6 +115,18 @@ describe('startServer', () => {
     });
   });
 
+  describe('GET /version', () => {
+    it('returns version string and commitHash', async () => {
+      const res = await fetch(`${baseUrl}/version`);
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { version: string; commitHash: string | null };
+      expect(typeof data.version).toBe('string');
+      expect(data.version).toMatch(/^\d+\.\d+\.\d+/);
+      // commitHash is null in test environments (no dist/.build-rev)
+      expect(data.commitHash === null || typeof data.commitHash === 'string').toBe(true);
+    });
+  });
+
   describe('GET /pdf', () => {
     it('returns 200 with content-type application/pdf', async () => {
       const res = await fetch(`${baseUrl}/pdf`);

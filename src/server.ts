@@ -1,9 +1,10 @@
 import { createServer } from 'node:http';
 import { homedir, networkInterfaces, tmpdir } from 'node:os';
-import { watch } from 'node:fs';
+import { watch, readFileSync } from 'node:fs';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import Busboy from 'busboy';
 import express from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -16,7 +17,22 @@ import type {
   DirectoryEntry,
   FpdfDocument,
   UiCapabilitiesResponse,
+  VersionResponse,
 } from './types.js';
+
+// Read the package version once at module load from package.json, which sits
+// one level above both the compiled dist/ directory and the source src/ directory.
+const _serverDir = path.dirname(fileURLToPath(import.meta.url));
+let _serverVersion = 'unknown';
+try {
+  const pkg = JSON.parse(readFileSync(path.join(_serverDir, '..', 'package.json'), 'utf-8')) as {
+    version: string;
+  };
+  _serverVersion = pkg.version;
+} catch {
+  // Non-fatal — keeps running with 'unknown'
+}
+const SERVER_VERSION: string = _serverVersion;
 
 /**
  * Write `content` to `dest` atomically by first writing to `dest.tmp` and
@@ -209,6 +225,28 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   app.get('/health', (_req, res) => {
     res.setHeader('Content-Type', 'text/plain');
     res.send('ok');
+  });
+
+  // --- Version info ---
+  // Returns the semver version from package.json and the git commit hash of
+  // the running build (read from dist/.build-rev written by `pnpm build`).
+  app.get('/version', (_req, res) => {
+    const run = async (): Promise<void> => {
+      const buildRevPath = path.join(_serverDir, '.build-rev');
+      let commitHash: string | null = null;
+      try {
+        const raw = await readFile(buildRevPath, 'utf-8');
+        commitHash = raw.trim() || null;
+      } catch {
+        // Not present in dev/test environments — return null.
+      }
+      const response: VersionResponse = { version: SERVER_VERSION, commitHash };
+      res.json(response);
+    };
+    run().catch((err: unknown) => {
+      logger.error(`GET /version failed: ${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: 'Failed to read version info' });
+    });
   });
 
   // --- PDF bytes ---
@@ -802,7 +840,18 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   const publicDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'public');
   // Disable automatic index.html serving so the catch-all below can decide
   // which shell to serve based on whether a PDF has been loaded.
-  app.use(express.static(publicDir, { index: false }));
+  // HTML and JS files get Cache-Control: no-cache so browsers always revalidate
+  // after a rebuild/restart rather than serving stale cached bundles.
+  app.use(
+    express.static(publicDir, {
+      index: false,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('.html') || filePath.endsWith('.js')) {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
+    }),
+  );
 
   // --- Catch-all: serve pick.html in picker mode, index.html in fill mode ---
   //
@@ -1094,6 +1143,17 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
   // Use a getter so callers always read the current ownerToken value even after
   // POST /open, POST /upload, or POST /reset mutate it.
+  // Read the commit hash (best-effort — null when dist/.build-rev doesn't exist).
+  let startupCommit: string | null = null;
+  try {
+    const raw = await readFile(path.join(_serverDir, '.build-rev'), 'utf-8');
+    startupCommit = raw.trim() || null;
+  } catch {
+    // Dev/test environment — no build-rev file.
+  }
+  const commitSuffix = startupCommit ? ` (commit ${startupCommit.slice(0, 8)})` : '';
+  logger.info(`fpdf v${SERVER_VERSION}${commitSuffix} listening on ${url}`);
+
   return {
     url,
     networkUrls,

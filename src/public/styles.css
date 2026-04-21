@@ -139,6 +139,40 @@ body {
   color: var(--color-zoom-level);
 }
 
+.toolbar-group--version {
+  margin-left: auto;
+  padding-right: 4px;
+  border-left: none;
+}
+
+#app-version {
+  font-size: 10pt;
+  font-family: monospace;
+  color: var(--color-status);
+  opacity: 0.55;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+}
+
+#app-version[data-tooltip]:hover::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--bg-toolbar);
+  border: 1px solid var(--border-toolbar);
+  color: var(--color-status);
+  font-size: 9pt;
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  z-index: 100;
+}
+
 /* ── Page layout ── */
 
 #pages {

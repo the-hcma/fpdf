@@ -12,6 +12,7 @@ import {
   MINIMAL_JPEG,
   MINIMAL_PNG,
   MINIMAL_TRANSPARENT_PNG,
+  MINIMAL_TRANSPARENT_GRAY_PNG,
 } from './helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -662,7 +663,7 @@ describe('exportPdf — placed images', () => {
     expect(result.getPageCount()).toBe(1);
   });
 
-  it('adds a page transparency group when a placed PNG has an alpha channel', async () => {
+  it('adds a page transparency group and uses Multiply blend mode for placed PNGs', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
     const id = 'ffffffff-0000-1111-2222-333333333333';
     await writeFile(path.join(dir, `${id}.png`), MINIMAL_TRANSPARENT_PNG);
@@ -674,12 +675,31 @@ describe('exportPdf — placed images', () => {
     ];
     const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
     // Re-save without object stream compression so every in-memory dict key is
-    // readable as plain text — this lets us assert /Group /Transparency is
-    // present on the page without needing pdf-lib internals (PDFName etc.).
+    // readable as plain text — this lets us assert /Group /Transparency and
+    // /BM /Multiply are present without needing pdf-lib internals.
     const reloaded = await PDFDocument.load(bytes);
     const uncompressed = await reloaded.save({ useObjectStreams: false });
     const pdfText = Buffer.from(uncompressed).toString('latin1');
     expect(pdfText).toContain('/Transparency');
+    expect(pdfText).toContain('/Multiply');
+  });
+
+  it('adds a page transparency group and uses Multiply blend mode for a Grayscale+Alpha PNG', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
+    const id = 'aaaaaaaa-1111-2222-3333-444444444444';
+    await writeFile(path.join(dir, `${id}.png`), MINIMAL_TRANSPARENT_GRAY_PNG);
+    const doc = makeBlankDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/png', placement: { x: 50, y: 600, width: 100, height: 100 } },
+    ];
+    const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
+    const reloaded = await PDFDocument.load(bytes);
+    const uncompressed = await reloaded.save({ useObjectStreams: false });
+    const pdfText = Buffer.from(uncompressed).toString('latin1');
+    expect(pdfText).toContain('/Transparency');
+    expect(pdfText).toContain('/Multiply');
   });
 
   it('skips a placed image whose file is missing and still produces a valid PDF', async () => {

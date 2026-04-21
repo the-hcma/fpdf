@@ -173,10 +173,21 @@ if [[ -d "${REPO_DIR}/dist" ]]; then
         built_rev=$(tr -d '[:space:]' < "$build_rev_file" 2>/dev/null || true)
         head_rev=$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)
         if [[ -n "$built_rev" && -n "$head_rev" && "$built_rev" != "$head_rev" ]]; then
-            echo "🔄 dist was built at ${built_rev:0:8}, HEAD is ${head_rev:0:8} — code changed, will restart."
+            echo "🔄 dist was built at ${built_rev:0:8}, HEAD is ${head_rev:0:8} — code changed, will rebuild and restart."
+            pnpm --prefix "${REPO_DIR}" build
             code_changed=true
         fi
     fi
+fi
+
+# Show installed version and commit
+pkg_version=$(node -p "require('${REPO_DIR}/package.json').version" 2>/dev/null || echo "unknown")
+build_rev_file="${REPO_DIR}/dist/.build-rev"
+if [[ -f "$build_rev_file" ]]; then
+    built_rev=$(tr -d '[:space:]' < "$build_rev_file" 2>/dev/null || true)
+    echo "📦 fpdf v${pkg_version} (commit ${built_rev:0:8})"
+else
+    echo "📦 fpdf v${pkg_version}"
 fi
 
 # 7. Reload daemon only if service file changed

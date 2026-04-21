@@ -1274,6 +1274,7 @@ function buildImageElement(
 
   const wrapper = document.createElement('div');
   wrapper.className = 'field-wrapper image-wrapper';
+  wrapper.style.mixBlendMode = 'multiply';
   positionElement(wrapper, img, page, scale);
 
   imgEl.addEventListener('load', () => {
@@ -1867,6 +1868,24 @@ async function exportViaCanvas(fpdfDoc: FpdfDocument, pagesContainer: HTMLElemen
   return res.blob();
 }
 
+// ── Version badge ─────────────────────────────────────────────────────────────
+
+async function initVersion(): Promise<void> {
+  const el = document.getElementById('app-version');
+  if (!el) return;
+  try {
+    const res = await fetch('/version');
+    if (!res.ok) return;
+    const data = (await res.json()) as { version: string; commitHash: string | null };
+    el.textContent = `v${data.version}`;
+    el.dataset.tooltip = data.commitHash
+      ? `v${data.version} — commit ${data.commitHash}`
+      : `v${data.version}`;
+  } catch {
+    // Non-critical — leave the element empty.
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -1876,6 +1895,7 @@ async function main(): Promise<void> {
   });
   initToggle();
   initZoom();
+  void initVersion();
   setStatus('Loading…');
 
   // Detect whether this fill session was entered via POST /upload (remote access).

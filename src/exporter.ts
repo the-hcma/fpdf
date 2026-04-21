@@ -19,6 +19,7 @@ import {
   PDFAcroCheckBox,
   StandardFonts,
   TextAlignment,
+  BlendMode,
   degrees,
   rgb,
 } from 'pdf-lib';
@@ -144,6 +145,11 @@ function removeExcludedPages(pdfDoc: PDFDocument, doc: FpdfDocument): void {
 /**
  * Stamp all placed images for every page onto `pdfDoc`.  Missing image files
  * are skipped with a warning so a missing upload never blocks the export.
+ *
+ * All placed images are drawn with the Multiply blend mode so that dark marks
+ * (signatures, stamps) on a white background composite correctly against the
+ * existing page content — white pixels become transparent, dark pixels remain.
+ * Multiply requires a page-level transparency group, which we add here.
  */
 async function drawPlacedImages(
   pdfDoc: PDFDocument,
@@ -154,6 +160,16 @@ async function drawPlacedImages(
     if (!docPage.images?.length) continue;
     const page = pdfDoc.getPage(docPage.pageNumber - 1);
     const pageRotation = docPage.rotationDeg ?? 0;
+
+    // Multiply blend mode requires a page transparency group.  Add one if the
+    // page doesn't already declare one.
+    if (!page.node.has(PDFName.of('Group'))) {
+      const groupDict = pdfDoc.context.obj({});
+      groupDict.set(PDFName.of('S'), PDFName.of('Transparency'));
+      groupDict.set(PDFName.of('CS'), PDFName.of('DeviceRGB'));
+      page.node.set(PDFName.of('Group'), groupDict);
+    }
+
     for (const img of docPage.images) {
       const ext = img.mimeType === 'image/jpeg' ? 'jpg' : 'png';
       const imgPath = path.join(imagesDir, `${img.id}.${ext}`);
@@ -166,34 +182,6 @@ async function drawPlacedImages(
       }
       const embedded =
         img.mimeType === 'image/jpeg' ? await pdfDoc.embedJpg(buf) : await pdfDoc.embedPng(buf);
-      // For PNG images: if the embedder produced a soft mask (alpha channel),
-      // ensure the page declares a PDF transparency group.  Without a
-      // /Group /Transparency dict on the page, some viewers (notably Acrobat)
-      // do not composite the SMask and render the image with a solid background.
-      if (img.mimeType === 'image/png') {
-        // pdf-lib defers XObject embedding until save().  Force it now so that
-        // the stream is present in the context and we can inspect its /SMask key.
-        await embedded.embed();
-        // pdf-lib stores the image XObject as a PDFRawStream (which extends PDFStream),
-        // not a PDFDict.  PDFStream is not exported from pdf-lib's public API, so we
-        // use unknown-based narrowing to access its .dict without unsafe member access.
-        const rawObj: unknown = pdfDoc.context.lookup(embedded.ref);
-        const imgDict =
-          rawObj !== null &&
-          typeof rawObj === 'object' &&
-          'dict' in rawObj &&
-          rawObj.dict instanceof PDFDict
-            ? rawObj.dict
-            : undefined;
-        if (imgDict?.has(PDFName.of('SMask'))) {
-          if (!page.node.has(PDFName.of('Group'))) {
-            const groupDict = pdfDoc.context.obj({});
-            groupDict.set(PDFName.of('S'), PDFName.of('Transparency'));
-            groupDict.set(PDFName.of('CS'), PDFName.of('DeviceRGB'));
-            page.node.set(PDFName.of('Group'), groupDict);
-          }
-        }
-      }
       const raw = toRawRect(
         img.placement.x,
         img.placement.y,
@@ -203,7 +191,7 @@ async function drawPlacedImages(
         docPage.heightPt,
         pageRotation,
       );
-      page.drawImage(embedded, raw);
+      page.drawImage(embedded, { ...raw, blendMode: BlendMode.Multiply });
     }
   }
 }

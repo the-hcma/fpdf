@@ -1,4 +1,9 @@
-import type { BrowseResponse, DirectoryEntry, UiCapabilitiesResponse } from '../types.js';
+import type {
+  BrowseResponse,
+  DirectoryEntry,
+  UiCapabilitiesResponse,
+  VersionResponse,
+} from '../types.js';
 
 // ── Dark mode (mirrors app.ts) ────────────────────────────────────────────────
 // Applied immediately to avoid flash of wrong theme.
@@ -111,6 +116,22 @@ function applyUiCapabilities(canBrowse: boolean): void {
     if (statusEl) statusEl.hidden = true;
     if (entryListEl) entryListEl.hidden = true;
     if (introMsgEl) introMsgEl.textContent = 'Upload a PDF from your device to get started.';
+  }
+}
+
+async function initVersion(): Promise<void> {
+  const el = document.getElementById('app-version');
+  if (!el) return;
+  try {
+    const res = await fetch('/version');
+    if (!res.ok) return;
+    const data = (await res.json()) as VersionResponse;
+    el.textContent = `v${data.version}`;
+    el.dataset.tooltip = data.commitHash
+      ? `v${data.version} — commit ${data.commitHash}`
+      : `v${data.version}`;
+  } catch {
+    // Non-critical — leave the element empty.
   }
 }
 
@@ -468,6 +489,7 @@ async function init(): Promise<void> {
   initDarkToggle();
   initWebSocket();
   initUpload();
+  void initVersion();
   await loadUiCapabilities();
   if (canBrowseServerFiles) {
     void browse(null);

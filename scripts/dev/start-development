@@ -4,7 +4,9 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
-main_repo="$(git -C "$script_dir" rev-parse --show-toplevel)"
+# Use the primary worktree path, not --show-toplevel which returns the *current*
+# worktree root when the script is invoked from inside a linked worktree.
+main_repo="$(git -C "$script_dir" worktree list --porcelain | awk 'NR==1{print $2}')"
 readonly main_repo
 readonly worktrees_dir="$main_repo/.worktrees"
 
@@ -97,7 +99,10 @@ while IFS= read -r line; do
 
         if [[ "$pr_state" == "MERGED" || "$pr_state" == "CLOSED" ]]; then
             echo "   [!] PR is $pr_state. Removing worktree..."
-            git -C "$main_repo" worktree remove --force "$current_path"
+            git -C "$main_repo" worktree remove --force "$current_path" 2>/dev/null || true
+            rm -rf "$current_path"
+            git -C "$main_repo" worktree prune
+            git -C "$main_repo" branch -D "$current_branch" 2>/dev/null || true
         else
             echo "   [+] PR is $pr_state. Keeping worktree."
             pending_worktrees+=("$current_path|$current_branch")
@@ -106,7 +111,7 @@ while IFS= read -r line; do
 done <<< "$wt_info"
 
 # 3. Synchronize Graphite and prune merged branches
-echo "Synchronizing Graphite (gt sync -f -d -a)..."
+echo "Synchronizing Graphite (gt sync -f -d)..."
 
 has_changes=$(git -C "$main_repo" status --porcelain)
 stashed=false
@@ -116,12 +121,51 @@ if [[ -n "$has_changes" ]]; then
     stashed=true
 fi
 
-gt --cwd "$main_repo" sync -q -f -d -a
+(cd "$main_repo" && gt sync -q -f -d)
 
 if [[ "$stashed" == "true" ]]; then
     echo "Restoring local changes in main repo..."
     git -C "$main_repo" stash pop
 fi
+
+# 3b. Prune orphaned local branches:
+#   - PR is MERGED/CLOSED (remote branch still exists), OR
+#   - No PR found but branch is fully merged into main (remote branch already deleted)
+echo "Pruning orphaned local branches..."
+
+active_branches=()
+while IFS= read -r wt_line; do
+    if [[ "$wt_line" =~ ^branch\ refs/heads/(.*) ]]; then
+        active_branches+=("${BASH_REMATCH[1]}")
+    fi
+done <<< "$(git -C "$main_repo" worktree list --porcelain)"
+
+while IFS= read -r branch; do
+    [[ "$branch" == "main" ]] && continue
+    in_worktree=false
+    for ab in "${active_branches[@]}"; do
+        [[ "$ab" == "$branch" ]] && in_worktree=true && break
+    done
+    [[ "$in_worktree" == "true" ]] && continue
+
+    orphan_state=$(timeout 15 gh --repo the-hcma/fpdf pr view "$branch" \
+        --json state --template '{{.state}}' 2>/dev/null || echo "NOT_FOUND")
+
+    if [[ "$orphan_state" == "MERGED" || "$orphan_state" == "CLOSED" ]]; then
+        echo "   [!] Deleting $branch (PR: $orphan_state)..."
+        git -C "$main_repo" branch -D "$branch" 2>/dev/null || true
+    elif [[ "$orphan_state" == "NOT_FOUND" ]]; then
+        # Remote branch gone; check if it's fully merged into main locally
+        if git -C "$main_repo" branch --merged main | grep -qxF "  $branch"; then
+            echo "   [!] Deleting $branch (merged into main, no remote PR)..."
+            git -C "$main_repo" branch -D "$branch" 2>/dev/null || true
+        else
+            echo "   [+] Keeping $branch (unmerged, no remote PR)."
+        fi
+    else
+        echo "   [+] Keeping $branch (PR: $orphan_state)."
+    fi
+done <<< "$(git -C "$main_repo" branch --format='%(refname:short)')"
 
 # Update main if behind origin and restart service if updated
 local_main=$(git -C "$main_repo" rev-parse main)
@@ -182,7 +226,7 @@ if [[ -z "$selected_path" ]]; then
     echo ""
     echo "Creating worktree '$branch_name' at $selected_path..."
     git -C "$main_repo" worktree add -b "$branch_name" "$selected_path" main
-    gt --cwd "$selected_path" track --parent main
+    (cd "$selected_path" && gt track --parent main)
 
     echo ""
     echo "Start your first branch with:"

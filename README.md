@@ -1,5 +1,7 @@
 # fpdf
 
+[![npm version](https://img.shields.io/npm/v/@the-hcma/fpdf)](https://www.npmjs.com/package/@the-hcma/fpdf)
+
 Fill PDF forms interactively in your browser, then export a completed PDF — all from the command line.
 
 `fpdf` spawns a local web server, renders your PDF via PDF.js, and overlays precisely-positioned HTML inputs over each form field. Changes are live-synced to a portable `.fpdf.json` file you can edit by hand, share, or resume later.
@@ -126,10 +128,26 @@ If this happens, the service will show a `failed` status. To recover:
 
 ## Installation
 
-You can run `fpdf` directly without installing it globally using `npx`:
+Run `fpdf` directly without installing it globally using `npx`:
 
 ```bash
+# Show all commands and options
+npx @the-hcma/fpdf --help
+
+# Fill a form (opens the browser UI)
 npx @the-hcma/fpdf fill form.pdf
+
+# Fill and auto-open in the default browser
+npx @the-hcma/fpdf fill form.pdf --open
+
+# Export filled values to a new PDF
+npx @the-hcma/fpdf export form.fpdf.json -o filled.pdf
+
+# Pin to a specific version
+npx @the-hcma/fpdf@1.0.1 fill form.pdf
+
+# Always pull the latest published version
+npx @the-hcma/fpdf@latest fill form.pdf
 ```
 
 Alternatively, install it globally to use the `fpdf` command directly:

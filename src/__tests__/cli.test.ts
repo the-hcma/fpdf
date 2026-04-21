@@ -1224,3 +1224,56 @@ describe('CLI program structure', () => {
     expect(helpOutput).toContain('export options:');
   });
 });
+
+describe('entry point guard', () => {
+  it('does not call buildProgram().parse() when process.argv[1] resolves to a different path than the module', async () => {
+    // Covers the common case: running under a test runner where process.argv[1] is
+    // the vitest binary — not cli.ts.  parse() must never be invoked automatically.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const savedArgv = [...process.argv];
+    process.argv = ['node', '/usr/local/bin/vitest'];
+    vi.resetModules();
+    vi.doMock('node:fs', () => ({
+      existsSync: vi.fn().mockReturnValue(false),
+      readFileSync: vi.fn(),
+      // Identity function — every path stays as-is, so argv[1] ≠ module URL.
+      realpathSync: vi.fn().mockImplementation((p: string) => p),
+    }));
+    try {
+      await import('../cli.js');
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      process.argv = savedArgv;
+      exitSpy.mockRestore();
+      vi.resetModules();
+    }
+  });
+
+  it('calls buildProgram().parse() when process.argv[1] is a symlink that resolves to the same realpath as the module', async () => {
+    // Regression test: before the realpathSync fix, running via `npx @the-hcma/fpdf`
+    // produced no output.  npm/npx places a .bin/ symlink as argv[1]; the symlink path
+    // never matched import.meta.url (the real path), so buildProgram().parse() was
+    // never called.  Now both sides go through realpathSync() first.
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+    const savedArgv = [...process.argv];
+    process.argv = ['node', '/home/user/.npm/_npx/12345/node_modules/.bin/fpdf', '--help'];
+    vi.resetModules();
+    vi.doMock('node:fs', () => ({
+      existsSync: vi.fn().mockReturnValue(false),
+      readFileSync: vi.fn(),
+      // Both the .bin/fpdf symlink and import.meta.url resolve to the same real
+      // path — exactly what happens when the package is run via npx or a global
+      // npm/pnpm install.
+      realpathSync: vi.fn().mockReturnValue('/real/path/to/dist/cli.js'),
+    }));
+    try {
+      await expect(import('../cli.js')).rejects.toThrow('process.exit called');
+    } finally {
+      process.argv = savedArgv;
+      exitSpy.mockRestore();
+      vi.resetModules();
+    }
+  });
+});

@@ -6,7 +6,13 @@ import * as path from 'node:path';
 import { PDFDocument, TextAlignment, degrees } from 'pdf-lib';
 import { exportPdf, ExportError } from '../exporter.js';
 import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
-import { makePdfBytes, writeTempPdf, MINIMAL_JPEG, MINIMAL_PNG } from './helpers.js';
+import {
+  makePdfBytes,
+  writeTempPdf,
+  MINIMAL_JPEG,
+  MINIMAL_PNG,
+  MINIMAL_TRANSPARENT_PNG,
+} from './helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -654,6 +660,26 @@ describe('exportPdf — placed images', () => {
     expect(bytes.length).toBeGreaterThan(sourceBytes.length);
     const result = await PDFDocument.load(bytes);
     expect(result.getPageCount()).toBe(1);
+  });
+
+  it('adds a page transparency group when a placed PNG has an alpha channel', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
+    const id = 'ffffffff-0000-1111-2222-333333333333';
+    await writeFile(path.join(dir, `${id}.png`), MINIMAL_TRANSPARENT_PNG);
+    const doc = makeBlankDoc();
+    const page0 = doc.pages[0];
+    if (page0 === undefined) throw new Error('expected page 0');
+    page0.images = [
+      { id, mimeType: 'image/png', placement: { x: 50, y: 600, width: 100, height: 100 } },
+    ];
+    const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
+    // Re-save without object stream compression so every in-memory dict key is
+    // readable as plain text — this lets us assert /Group /Transparency is
+    // present on the page without needing pdf-lib internals (PDFName etc.).
+    const reloaded = await PDFDocument.load(bytes);
+    const uncompressed = await reloaded.save({ useObjectStreams: false });
+    const pdfText = Buffer.from(uncompressed).toString('latin1');
+    expect(pdfText).toContain('/Transparency');
   });
 
   it('skips a placed image whose file is missing and still produces a valid PDF', async () => {

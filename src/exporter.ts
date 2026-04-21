@@ -166,6 +166,34 @@ async function drawPlacedImages(
       }
       const embedded =
         img.mimeType === 'image/jpeg' ? await pdfDoc.embedJpg(buf) : await pdfDoc.embedPng(buf);
+      // For PNG images: if the embedder produced a soft mask (alpha channel),
+      // ensure the page declares a PDF transparency group.  Without a
+      // /Group /Transparency dict on the page, some viewers (notably Acrobat)
+      // do not composite the SMask and render the image with a solid background.
+      if (img.mimeType === 'image/png') {
+        // pdf-lib defers XObject embedding until save().  Force it now so that
+        // the stream is present in the context and we can inspect its /SMask key.
+        await embedded.embed();
+        // pdf-lib stores the image XObject as a PDFRawStream (which extends PDFStream),
+        // not a PDFDict.  PDFStream is not exported from pdf-lib's public API, so we
+        // use unknown-based narrowing to access its .dict without unsafe member access.
+        const rawObj: unknown = pdfDoc.context.lookup(embedded.ref);
+        const imgDict =
+          rawObj !== null &&
+          typeof rawObj === 'object' &&
+          'dict' in rawObj &&
+          rawObj.dict instanceof PDFDict
+            ? rawObj.dict
+            : undefined;
+        if (imgDict?.has(PDFName.of('SMask'))) {
+          if (!page.node.has(PDFName.of('Group'))) {
+            const groupDict = pdfDoc.context.obj({});
+            groupDict.set(PDFName.of('S'), PDFName.of('Transparency'));
+            groupDict.set(PDFName.of('CS'), PDFName.of('DeviceRGB'));
+            page.node.set(PDFName.of('Group'), groupDict);
+          }
+        }
+      }
       const raw = toRawRect(
         img.placement.x,
         img.placement.y,

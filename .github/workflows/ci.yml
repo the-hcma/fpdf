@@ -14,8 +14,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Skip merge-queue branches — the merge queue validates the integrated
+          # state itself; CI there duplicates work without adding signal.
+          if [[ "${{ github.head_ref }}" == gtmq_merge_* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Skip when the PR is already merged — Graphite pushes a restack
+          # commit to the next branch after a merge lands, which would otherwise
+          # trigger a redundant CI run on an already-validated diff.
+          pr_number="${{ github.event.pull_request.number }}"
+          if [[ -n "$pr_number" ]]; then
+            merged=$(gh pr view "$pr_number" --repo "${{ github.repository }}" --json merged -q .merged)
+            echo "skip=$merged" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   shellcheck:
-    if: github.actor != 'graphite-app[bot]' || (github.event.pull_request.draft == true && !startsWith(github.head_ref, 'gtmq_merge_'))
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -23,7 +50,8 @@ jobs:
         run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
   ci:
-    if: github.actor != 'graphite-app[bot]' || (github.event.pull_request.draft == true && !startsWith(github.head_ref, 'gtmq_merge_'))
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -48,7 +76,8 @@ jobs:
 
   secret-scan:
     name: Secret Scan
-    if: github.actor != 'graphite-app[bot]' || (github.event.pull_request.draft == true && !startsWith(github.head_ref, 'gtmq_merge_'))
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

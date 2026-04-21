@@ -1,7 +1,27 @@
 {
-  "name": "fpdf",
+  "name": "@the-hcma/fpdf",
   "version": "0.1.0",
   "description": "CLI tool to fill PDF forms via a local browser overlay",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/the-hcma/fpdf.git"
+  },
+  "homepage": "https://github.com/the-hcma/fpdf",
+  "keywords": [
+    "pdf",
+    "cli",
+    "form-fill",
+    "pdf-forms"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "engines": {
     "node": ">=20"

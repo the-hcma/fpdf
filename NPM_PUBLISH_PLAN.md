@@ -17,10 +17,10 @@ Publish `fpdf` to npm as a scoped package (`@the-hcma/fpdf`) so users can run it
 
 ### Phase 1: Package readiness
 
-- [ ] **Rename package** in `package.json` to `@the-hcma/fpdf`
-- [ ] **Set `license`** to `PolyForm-Noncommercial-1.0.0` in `package.json`
-- [ ] **Add `files` field** to `package.json`: `["dist", "README.md", "LICENSE"]`
-- [ ] **Add metadata fields** to `package.json`:
+- [x] **Rename package** in `package.json` to `@the-hcma/fpdf`
+- [x] **Set `license`** to `PolyForm-Noncommercial-1.0.0` in `package.json`
+- [x] **Add `files` field** to `package.json`: `["dist", "README.md", "LICENSE"]`
+- [x] **Add metadata fields** to `package.json`:
   ```json
   "repository": {
     "type": "git",
@@ -29,24 +29,24 @@ Publish `fpdf` to npm as a scoped package (`@the-hcma/fpdf`) so users can run it
   "homepage": "https://github.com/the-hcma/fpdf",
   "keywords": ["pdf", "cli", "form-fill", "pdf-forms"]
   ```
-- [ ] **Add `publishConfig`** for public scoped access:
+- [x] **Add `publishConfig`** for public scoped access:
   ```json
   "publishConfig": { "access": "public" }
   ```
-- [ ] **Add `prepublishOnly` script**: `"pnpm run check && pnpm run test && pnpm run build"`
-- [ ] **Ensure `dist/cli.js` has a shebang** (`#!/usr/bin/env node`)
+- [x] **Add `prepublishOnly` script**: `"pnpm run check && pnpm run test && pnpm run build"`
+- [x] **Ensure `dist/cli.js` has a shebang** (`#!/usr/bin/env node`)
 
 ### Phase 2: CI — automated publish workflow
 
-- [ ] **Create `.github/workflows/publish.yml`** triggered on GitHub Releases (or `v*` tag pushes):
+- [x] **Create `.github/workflows/npm-publish.yml`** triggered on GitHub Releases (or `v*` tag pushes):
   - checkout → setup Node 20 + pnpm → install → check → test → build → `npm publish --provenance`
 - [ ] **Add `NPM_TOKEN`** as a repository secret
-- [ ] **Enable npm provenance** (`--provenance`) for supply-chain transparency
+- [x] **Enable npm provenance** (`--provenance`) for supply-chain transparency
 
 ### Phase 3: Versioning & release process
 
-- [ ] **Document the release process** in `README.md` or `RELEASING.md`
-- [ ] **Choose a versioning strategy** (manual bumps vs. `changesets` / `release-please`)
+- [x] **Document the release process** in `README.md` or `RELEASING.md`
+- [x] **Choose a versioning strategy** (manual bumps vs. `changesets` / `release-please`): Chosen **release-please**, configured in `.github/workflows/release-please.yml`
 - [ ] **Tag first release** as `v0.1.0` and publish
 
 ### Phase 4: Post-publish verification

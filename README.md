@@ -25,7 +25,7 @@ fpdf fill form.pdf --open
 fpdf export form.fpdf.json -o filled.pdf
 ```
 
-After step 3, `fpdf` behaves identically to the globally installed package. To unlink: `pnpm unlink --global fpdf`.
+After step 3, `fpdf` behaves identically to the globally installed package. To unlink: `pnpm unlink --global @the-hcma/fpdf`.
 
 ### Optional: macOS Finder app
 
@@ -127,7 +127,9 @@ If this happens, the service will show a `failed` status. To recover:
 ## Installation
 
 ```bash
-pnpm add -g fpdf
+npm install -g @the-hcma/fpdf
+# or
+pnpm add -g @the-hcma/fpdf
 ```
 
 To build from source instead, see the [Quickstart](#quickstart-from-source).
@@ -278,6 +280,10 @@ pnpm run check          # full pre-commit check
 
 - **`scripts/fpdf`**: The primary entry point. Handles Node.js environment setup (via `fnm` or `brew`), `pnpm install` checks, and invokes the built CLI.
 - **`scripts/build-ui.mjs`**: Invoked by `pnpm run build`. It uses **esbuild** to bundle the TypeScript frontend (`src/public`) and copies static assets (HTML/CSS) and the PDF.js worker into `dist/public`. This is required for the web interface to function.
+
+## Releasing
+
+See [RELEASING.md](RELEASING.md) for documentation on the automated Release Please and NPM publishing process.
 
 ## License
 

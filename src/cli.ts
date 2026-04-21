@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { writeFile, readFile, rm } from 'node:fs/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -600,7 +600,17 @@ export function buildProgram(): Command {
 }
 
 // Only parse argv when this file is the entry point.
+// Resolve symlinks on both sides so that bin/ symlinks (e.g. from npx or
+// npm install -g) match the real dist/cli.js path in import.meta.url.
 const entryFile = process.argv[1];
-if (entryFile !== undefined && import.meta.url === `file://${entryFile}`) {
-  buildProgram().parse(process.argv);
+if (entryFile !== undefined) {
+  let isMain = false;
+  try {
+    isMain = realpathSync(fileURLToPath(import.meta.url)) === realpathSync(entryFile);
+  } catch {
+    // realpathSync can throw if either path does not exist; treat as not main.
+  }
+  if (isMain) {
+    buildProgram().parse(process.argv);
+  }
 }

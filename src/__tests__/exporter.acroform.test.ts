@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll, vi, afterEach } from 'vitest';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
-import { PDFDocument, degrees } from 'pdf-lib';
+import { PDFDocument, TextAlignment, degrees } from 'pdf-lib';
 import { exportPdf, ExportError } from '../exporter.js';
 import type { FpdfDocument, PdfField, PdfKind, CandidateField } from '../types.js';
 import { makePdfBytes, writeTempPdf, MINIMAL_JPEG, MINIMAL_PNG } from './helpers.js';
@@ -340,6 +340,29 @@ describe('exportPdf', () => {
     // original `0 0 1 rg` (blue) must not appear in the output /DA.
     expect(da).not.toContain('0 0 1 rg');
     expect(da).toContain('0 g');
+  });
+
+  it('defaults to left alignment when the original widget has center quadding and no textAlign is set', async () => {
+    // Create a PDF whose text field has center quadding (Q=1) — typical of
+    // XFA-derived Cigna forms where AcroForm widgets inherit XFA centering.
+    const centeredBytes = await makePdfBytes((doc) => {
+      const page = doc.addPage([612, 792]);
+      const form = doc.getForm();
+      const tf = form.createTextField('centeredField');
+      tf.addToPage(page, { x: 50, y: 700, width: 200, height: 20 });
+      tf.setAlignment(TextAlignment.Center);
+    });
+    const centeredPath = await writeTempPdf('center-q.pdf', centeredBytes, 'fpdf-exporter-tests');
+
+    // No textAlign on the field — simulates user not touching alignment.
+    const doc = makeDoc([{ name: 'centeredField', type: 'text', value: 'Shopify Inc.' }]);
+    doc.metadata.originalPdf = centeredPath;
+
+    const bytes = await exportPdf(centeredPath, doc);
+    const result = await PDFDocument.load(bytes);
+    const tf = result.getForm().getTextField('centeredField');
+    // Quadding must have been forced to Left.
+    expect(tf.getAlignment()).toBe(TextAlignment.Left);
   });
 });
 

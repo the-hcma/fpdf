@@ -701,7 +701,7 @@ function createCandidateWidgets(
         const value = typeof c.value === 'string' ? c.value : '';
         if (value !== '') tf.setText(value);
         const align = toTextAlignment(c.textAlign);
-        if (align !== undefined) tf.setAlignment(align);
+        tf.setAlignment(align);
         const font = (c.fontName !== undefined ? fontCache.get(c.fontName) : undefined) ?? helv;
 
         // Auto-fit font size so text doesn't overflow the field bounds.
@@ -874,11 +874,14 @@ function forceBlackDA(field: PDFTextField): void {
  *   widget on-value array: stored value → index in getOnValues() → option name
  *   at that index in getOptions().
  */
-function toTextAlignment(align: string | undefined): TextAlignment | undefined {
+function toTextAlignment(align: string | undefined): TextAlignment {
   if (align === 'center') return TextAlignment.Center;
   if (align === 'right') return TextAlignment.Right;
-  if (align === 'left') return TextAlignment.Left;
-  return undefined; // 'justify' and undefined: leave the field's existing alignment
+  // 'left', 'justify', and undefined all fall back to Left.
+  // Returning Left (not undefined) ensures we always call setAlignment so the
+  // original PDF's quadding (which may be center in XFA-derived forms like
+  // Cigna) is overridden rather than preserved in the appearance stream.
+  return TextAlignment.Left;
 }
 
 function writeAcroFormValues(
@@ -896,8 +899,7 @@ function writeAcroFormValues(
 
       if (pdfField instanceof PDFTextField) {
         pdfField.setText(typeof value === 'string' ? value : '');
-        const alignment = toTextAlignment(alignments.get(name));
-        if (alignment !== undefined) pdfField.setAlignment(alignment);
+        pdfField.setAlignment(toTextAlignment(alignments.get(name)));
         const fontSize = fontSizes.get(name);
         if (fontSize !== undefined) pdfField.setFontSize(fontSize);
         // Force black text: strip any non-black colour operator from /DA so
@@ -1038,8 +1040,7 @@ function writeOrphanWidgetValues(
           const acroText = PDFAcroText.fromDict(annotDict, annotRef);
           const textField = PDFTextField.of(acroText, annotRef, pdfDoc);
           textField.setText(typeof value === 'string' ? value : '');
-          const alignment = toTextAlignment(alignments.get(name));
-          if (alignment !== undefined) textField.setAlignment(alignment);
+          textField.setAlignment(toTextAlignment(alignments.get(name)));
           const fontSize = fontSizes.get(name);
           if (fontSize !== undefined) {
             try {

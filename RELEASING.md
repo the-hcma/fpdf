@@ -1,6 +1,6 @@
 # Releasing & Publishing
 
-`fpdf` uses Google's [Release Please](https://github.com/google-github-actions/release-please-action) to automate versioning, changelog generation, and NPM publishing.
+`fpdf` uses Google's [Release Please](https://github.com/googleapis/release-please-action) to automate versioning, changelog generation, and NPM publishing.
 
 The release process relies entirely on **Conventional Commits** (`feat:`, `fix:`, `docs:`, etc.). 
 

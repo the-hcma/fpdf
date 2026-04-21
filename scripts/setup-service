@@ -158,22 +158,47 @@ current_user=$(whoami)
 echo "👤 Enabling lingering for user: $current_user"
 loginctl enable-linger "$current_user"
 
-# 6. Reload daemon only if service file changed
+# 6. Detect if built code changed since the service was last started.
+# Compares the newest *.js mtime under dist/ against the service's last
+# ExecMainStartTimestamp so a `pnpm build` that doesn't touch the .service
+# file is still detected and triggers a restart.
+code_changed=false
+if [[ -d "${REPO_DIR}/dist" ]] && systemctl --user is-active --quiet fpdf.service 2>/dev/null; then
+    start_ts=$(systemctl --user show fpdf.service --property=ExecMainStartTimestamp --value 2>/dev/null || true)
+    if [[ -n "$start_ts" ]]; then
+        start_epoch=$(date -d "$start_ts" +%s 2>/dev/null || echo 0)
+        if [[ "$start_epoch" -gt 0 ]]; then
+            ref_file=$(mktemp)
+            touch -d "@${start_epoch}" "$ref_file"
+            newer_dist=$(find "${REPO_DIR}/dist" -name '*.js' -newer "$ref_file" -print -quit 2>/dev/null || true)
+            rm -f "$ref_file"
+            if [[ -n "$newer_dist" ]]; then
+                echo "🔄 Built code changed since service started — will restart."
+                code_changed=true
+            fi
+        fi
+    fi
+fi
+
+# 7. Reload daemon only if service file changed
 if [[ "$service_changed" == "true" ]]; then
     echo "🔄 Reloading systemd user daemon..."
     systemctl --user daemon-reload
 fi
 
-# 7. Always ensure the service is enabled and running
+# 8. Always ensure the service is enabled and running
 systemctl --user enable fpdf.service
 if [[ "$service_changed" == "true" ]]; then
     echo "🔄 Restarting fpdf.service (config changed)..."
+    systemctl --user restart fpdf.service
+elif [[ "$code_changed" == "true" ]]; then
+    echo "🔄 Restarting fpdf.service (code changed)..."
     systemctl --user restart fpdf.service
 elif ! systemctl --user is-active --quiet fpdf.service; then
     echo "🚀 Starting fpdf.service (was not running)..."
     systemctl --user start fpdf.service
 else
-    echo "⏭️  Service file unchanged and service already running — no restart needed."
+    echo "⏭️  Service file and code unchanged — no restart needed."
 fi
 
 echo ""

@@ -218,7 +218,7 @@ describe('exportFromImages — readOnly=true (finalized export)', () => {
 });
 
 describe('exportFromImages — placed images', () => {
-  it('stamps a placed JPEG image into the exported PDF', async () => {
+  it('stamps a placed JPEG image into the exported PDF with a Multiply transparency group', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-img-'));
     const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     await writeFile(path.join(dir, `${id}.jpg`), MINIMAL_JPEG);
@@ -230,14 +230,14 @@ describe('exportFromImages — placed images', () => {
     ];
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
     const bytes = await exportFromImages(pages, doc, false, dir);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getPageCount()).toBe(1);
-    // The exported PDF should be larger than the page JPEG alone because it
-    // also contains the embedded placed-image JPEG bytes.
-    expect(bytes.length).toBeGreaterThan(MINIMAL_JPEG.length);
+    const reloaded = await PDFDocument.load(bytes);
+    const uncompressed = await reloaded.save({ useObjectStreams: false });
+    const pdfText = Buffer.from(uncompressed).toString('latin1');
+    expect(pdfText).toContain('/Transparency');
+    expect(pdfText).toContain('/Multiply');
   });
 
-  it('stamps a placed PNG image into the exported PDF', async () => {
+  it('stamps a placed PNG image into the exported PDF with a Multiply transparency group', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-img-'));
     const id = 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff';
     await writeFile(path.join(dir, `${id}.png`), MINIMAL_PNG);
@@ -249,9 +249,11 @@ describe('exportFromImages — placed images', () => {
     ];
     const pages: RenderedPage[] = [{ jpeg: MINIMAL_JPEG, widthPt: 612, heightPt: 792 }];
     const bytes = await exportFromImages(pages, doc, false, dir);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getPageCount()).toBe(1);
-    expect(bytes.length).toBeGreaterThan(MINIMAL_PNG.length);
+    const reloaded = await PDFDocument.load(bytes);
+    const uncompressed = await reloaded.save({ useObjectStreams: false });
+    const pdfText = Buffer.from(uncompressed).toString('latin1');
+    expect(pdfText).toContain('/Transparency');
+    expect(pdfText).toContain('/Multiply');
   });
 
   it('skips a placed image whose file is missing and still produces a valid PDF', async () => {

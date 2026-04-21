@@ -628,7 +628,7 @@ describe('exportPdf — placed images', () => {
     };
   }
 
-  it('stamps a placed JPEG into the exported AcroForm PDF', async () => {
+  it('stamps a placed JPEG into the exported PDF with a Multiply transparency group', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
     const id = 'cccccccc-dddd-eeee-ffff-aaaaaaaaaaaa';
     await writeFile(path.join(dir, `${id}.jpg`), MINIMAL_JPEG);
@@ -639,14 +639,14 @@ describe('exportPdf — placed images', () => {
       { id, mimeType: 'image/jpeg', placement: { x: 50, y: 650, width: 120, height: 60 } },
     ];
     const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
-    // The exported PDF should be larger than the source because it embeds the image.
-    const sourceBytes = await (await import('node:fs/promises')).readFile(blankPdfPath);
-    expect(bytes.length).toBeGreaterThan(sourceBytes.length);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getPageCount()).toBe(1);
+    const reloaded = await PDFDocument.load(bytes);
+    const uncompressed = await reloaded.save({ useObjectStreams: false });
+    const pdfText = Buffer.from(uncompressed).toString('latin1');
+    expect(pdfText).toContain('/Transparency');
+    expect(pdfText).toContain('/Multiply');
   });
 
-  it('stamps a placed PNG into the exported AcroForm PDF', async () => {
+  it('stamps a placed opaque PNG into the exported PDF with a Multiply transparency group', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'fpdf-placed-'));
     const id = 'dddddddd-eeee-ffff-aaaa-bbbbbbbbbbbb';
     await writeFile(path.join(dir, `${id}.png`), MINIMAL_PNG);
@@ -657,10 +657,11 @@ describe('exportPdf — placed images', () => {
       { id, mimeType: 'image/png', placement: { x: 100, y: 600, width: 80, height: 80 } },
     ];
     const bytes = await exportPdf(blankPdfPath, doc, { imagesDir: dir });
-    const sourceBytes = await (await import('node:fs/promises')).readFile(blankPdfPath);
-    expect(bytes.length).toBeGreaterThan(sourceBytes.length);
-    const result = await PDFDocument.load(bytes);
-    expect(result.getPageCount()).toBe(1);
+    const reloaded = await PDFDocument.load(bytes);
+    const uncompressed = await reloaded.save({ useObjectStreams: false });
+    const pdfText = Buffer.from(uncompressed).toString('latin1');
+    expect(pdfText).toContain('/Transparency');
+    expect(pdfText).toContain('/Multiply');
   });
 
   it('adds a page transparency group and uses Multiply blend mode for placed PNGs', async () => {

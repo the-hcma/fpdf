@@ -316,6 +316,7 @@ body {
 .overlay input[type='checkbox'],
 .overlay input[type='radio'] {
   cursor: pointer;
+  accent-color: black;
 }
 
 .overlay select {

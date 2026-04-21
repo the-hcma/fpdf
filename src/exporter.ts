@@ -228,11 +228,13 @@ export async function exportPdf(
 
   const allValues = new Map<string, string | boolean>();
   const allAlignments = new Map<string, string>();
+  const allColors = new Map<string, string>();
   for (const page of doc.pages) {
     for (const field of page.fields) {
       if (!allValues.has(field.name)) allValues.set(field.name, field.value);
       if (field.textAlign && !allAlignments.has(field.name))
         allAlignments.set(field.name, field.textAlign);
+      if (field.fontColor && !allColors.has(field.name)) allColors.set(field.name, field.fontColor);
     }
   }
 
@@ -297,7 +299,15 @@ export async function exportPdf(
     const xfaValue = acroForm instanceof PDFDict ? acroForm.get(PDFName.of('XFA')) : undefined;
 
     // Step 3: Fill AcroForm widget values (getForm() strips /XFA internally).
-    writeAcroFormValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, 'xfa-hybrid');
+    writeAcroFormValues(
+      pdfDoc,
+      allValues,
+      allAlignments,
+      fontSizes,
+      noScrollDisable,
+      'xfa-hybrid',
+      allColors,
+    );
 
     // Step 4: Generate widget appearances now that /XFA is already absent from
     // the in-memory dict — a second deleteXFA() call inside updateFieldAppearances
@@ -322,7 +332,15 @@ export async function exportPdf(
   } else {
     // ── Pure AcroForm PDF ─────────────────────────────────────────────────────
     // Phase 1: fill fields registered in the AcroForm field tree.
-    writeAcroFormValues(pdfDoc, allValues, allAlignments, fontSizes, noScrollDisable, 'acroform');
+    writeAcroFormValues(
+      pdfDoc,
+      allValues,
+      allAlignments,
+      fontSizes,
+      noScrollDisable,
+      'acroform',
+      allColors,
+    );
     // Phase 2: fill orphan widget annotations (present in page /Annots but not
     // in the AcroForm field tree — common in XFA-derived PDFs).  Each orphan
     // widget's appearance is regenerated inside this function using per-field font.
@@ -334,6 +352,7 @@ export async function exportPdf(
       noScrollDisable,
       helv,
       fieldFonts,
+      allColors,
     );
     // Regenerate appearances for AcroForm-tree fields using helv as base.
     pdfDoc.getForm().updateFieldAppearances(helv);
@@ -504,7 +523,7 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
   if (!hasCandidates) return;
 
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const COLOR = rgb(0, 0, 0);
+  const defaultColor = rgb(0, 0, 0);
   const TEXT_PADDING = 2; // pt from the left/bottom edge of the field
 
   for (const docPage of doc.pages) {
@@ -528,6 +547,7 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
     for (const candidate of candidatesWithValues) {
       const { x: vx, y: vy, width, height } = candidate.placement;
       const fontSize = Math.max(6, Math.round(height * 0.7));
+      const color = candidate.fontColor ? hexToColor(candidate.fontColor) : defaultColor;
 
       if (candidate.type === 'checkbox') {
         // Draw a centred "X" for checked checkboxes.
@@ -549,7 +569,7 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
           y: drawY,
           size: markSize,
           font,
-          color: COLOR,
+          color,
           rotate: drawRot,
         });
       } else {
@@ -582,7 +602,7 @@ async function drawCandidateValues(pdfDoc: PDFDocument, doc: FpdfDocument): Prom
           y: drawY,
           size,
           font,
-          color: COLOR,
+          color,
           rotate: drawRot,
           // maxWidth only applies to unrotated draws; the size-clamping loop above
           // already ensures the text fits horizontally.
@@ -743,7 +763,10 @@ function createCandidateWidgets(
         }
 
         if (readOnly) tf.enableReadOnly();
-        if (font !== undefined) tf.updateAppearances(font);
+        if (font !== undefined) {
+          if (c.fontColor) patchDAColor(tf, c.fontColor);
+          tf.updateAppearances(font);
+        }
       }
     }
   }
@@ -865,17 +888,39 @@ function applyNonDefaultFontAppearances(
  * grayscale) before appearances are regenerated.
  *
  * Operators handled (non-stroking / fill only):
- *   n n n n k  (CMYK)  →  0 g
- *   n n n rg   (RGB)   →  0 g
- *   n g        (gray)  →  0 g  (no-op when already `0 g`)
+ *   n n n n k  (CMYK)  →  target colour
+ *   n n n rg   (RGB)   →  target colour
+ *   n g        (gray)  →  target colour
+ *
+ * @param hex  Target colour as a CSS hex string (e.g. '#cc0000').  Defaults to
+ *   '#000000' (black), which produces the grayscale `0 g` operator.
  */
-function forceBlackDA(field: PDFTextField): void {
+function hexToRgbPdfOp(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  if (r === 0 && g === 0 && b === 0) return '0 g';
+  return `${r.toFixed(3)} ${g.toFixed(3)} ${b.toFixed(3)} rg`;
+}
+
+function hexToColor(hex: string) {
+  return rgb(
+    parseInt(hex.slice(1, 3), 16) / 255,
+    parseInt(hex.slice(3, 5), 16) / 255,
+    parseInt(hex.slice(5, 7), 16) / 255,
+  );
+}
+
+function patchDAColor(field: PDFTextField, hex = '#000000'): void {
   const da = field.acroField.getDefaultAppearance();
   if (da === undefined) return;
-  const patched = da
-    .replace(/[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+k(?=\s|$)/g, '0 g')
-    .replace(/[\d.]+\s+[\d.]+\s+[\d.]+\s+rg(?=\s|$)/g, '0 g')
-    .replace(/[\d.]+\s+g(?=\s|$)/g, '0 g');
+  const op = hexToRgbPdfOp(hex);
+  let patched = da
+    .replace(/[\d.]+\s+[\d.]+\s+[\d.]+\s+[\d.]+\s+k(?=\s|$)/g, op)
+    .replace(/[\d.]+\s+[\d.]+\s+[\d.]+\s+rg(?=\s|$)/g, op)
+    .replace(/[\d.]+\s+g(?=\s|$)/g, op);
+  // If no colour operator was present, append one so it is always set.
+  if (patched === da) patched = `${da} ${op}`.trimStart();
   if (patched !== da) {
     field.acroField.setDefaultAppearance(patched);
   }
@@ -907,6 +952,7 @@ function writeAcroFormValues(
   fontSizes: Map<string, number>,
   noScrollDisable: Set<string>,
   pdfKind: PdfKind,
+  colors: Map<string, string>,
 ): void {
   const form = pdfDoc.getForm();
   for (const [name, value] of values) {
@@ -918,10 +964,9 @@ function writeAcroFormValues(
         pdfField.setAlignment(toTextAlignment(alignments.get(name)));
         const fontSize = fontSizes.get(name);
         if (fontSize !== undefined) pdfField.setFontSize(fontSize);
-        // Force black text: strip any non-black colour operator from /DA so
-        // the generated appearance stream renders text in black, not the
-        // original form colour (e.g. Cigna blue).
-        forceBlackDA(pdfField);
+        // Force correct text colour: strip any existing colour operator from /DA
+        // and replace with the user-specified colour (default: black).
+        patchDAColor(pdfField, colors.get(name));
         // Disable scrolling so viewers don't render a scroll bar — but only
         // when the text actually fits at the computed font size.  For fields
         // where the text overflows even at the minimum size, leave scrolling
@@ -1015,6 +1060,7 @@ function writeOrphanWidgetValues(
   noScrollDisable: Set<string>,
   helv: PDFFont,
   fieldFonts: Map<string, PDFFont>,
+  colors: Map<string, string>,
 ): void {
   for (let pageIdx = 0; pageIdx < pdfDoc.getPageCount(); pageIdx++) {
     const page = pdfDoc.getPage(pageIdx);
@@ -1072,8 +1118,8 @@ function writeOrphanWidgetValues(
               // Not all widgets support scrolling flags — safe to skip.
             }
           }
-          // Force black text: same colour normalisation as writeAcroFormValues.
-          forceBlackDA(textField);
+          // Force correct text colour (default: black).
+          patchDAColor(textField, colors.get(name));
           textField.updateAppearances(fieldFonts.get(name) ?? helv);
         } else if (ft === '/Btn') {
           // ── Checkbox ────────────────────────────────────────────────────

@@ -65,6 +65,11 @@ export interface CandidateField {
    */
   fontName?: string;
   /**
+   * Text fill colour as a CSS hex string (e.g. '#cc0000' for red).
+   * Used for candidate text fields; defaults to black when omitted.
+   */
+  fontColor?: string;
+  /**
    * For type='radio': the on-value this specific button represents (e.g. 'yes', 'option1').
    * Stored as the selected value in `value` across all buttons in the same group.
    */
@@ -129,6 +134,11 @@ export interface PdfField {
    * Used to embed the correct font on export. Omitted when Helvetica (implicit default).
    */
   fontName?: string;
+  /**
+   * Text fill colour as a CSS hex string (e.g. '#cc0000' for red).
+   * Defaults to black when omitted.
+   */
+  fontColor?: string;
 }
 
 /**

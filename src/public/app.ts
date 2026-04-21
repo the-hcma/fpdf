@@ -1032,8 +1032,8 @@ function initEditInteractions(
         });
       }
 
-      // Text alignment
-      if (anyField && inputEl) {
+      // Text alignment (text and textarea fields only)
+      if (anyField && inputEl && (anyField.type === 'text' || anyField.type === 'textarea')) {
         const safeField = anyField;
         const safeInputEl = inputEl;
         items.push({
@@ -1056,7 +1056,7 @@ function initEditInteractions(
         });
       }
 
-      // Font picker (text and textarea fields only)
+      // Font picker and text color (text and textarea fields only)
       if (anyField && inputEl && (anyField.type === 'text' || anyField.type === 'textarea')) {
         const safeField = anyField;
         const safeInputEl = inputEl;
@@ -1080,6 +1080,30 @@ function initEditInteractions(
                 safeField.fontName = value;
               }
               safeInputEl.style.fontFamily = toCssFontFamily(value);
+              onDirty();
+            },
+          })),
+        });
+        items.push({
+          label: 'Text color',
+          submenu: (
+            [
+              { label: 'Black', value: '#000000' },
+              { label: 'Blue', value: '#0066cc' },
+              { label: 'Dark blue', value: '#003399' },
+              { label: 'Green', value: '#006600' },
+              { label: 'Red', value: '#cc0000' },
+            ] as { label: string; value: string }[]
+          ).map(({ label, value }) => ({
+            label,
+            action: () => {
+              if (value === '#000000') {
+                delete safeField.fontColor;
+              } else {
+                safeField.fontColor = value;
+              }
+              safeInputEl.style.setProperty('color', value, 'important');
+              safeInputEl.style.setProperty('-webkit-text-fill-color', value, 'important');
               onDirty();
             },
           })),
@@ -1373,6 +1397,10 @@ function buildFieldElement(
   enforceOverlayTextStyle(el);
   if (field.textAlign) el.style.textAlign = field.textAlign;
   if (field.fontName) el.style.fontFamily = toCssFontFamily(field.fontName);
+  if (field.fontColor) {
+    el.style.setProperty('color', field.fontColor, 'important');
+    el.style.setProperty('-webkit-text-fill-color', field.fontColor, 'important');
+  }
 
   // Wrap in a positioned div so the required marker can be absolutely placed
   // alongside the input (inputs don't support ::before/::after cross-browser).
@@ -1462,6 +1490,10 @@ function buildCandidateFieldElement(
   enforceOverlayTextStyle(el);
   if (field.textAlign) el.style.textAlign = field.textAlign;
   if (field.fontName) el.style.fontFamily = toCssFontFamily(field.fontName);
+  if (field.fontColor) {
+    el.style.setProperty('color', field.fontColor, 'important');
+    el.style.setProperty('-webkit-text-fill-color', field.fontColor, 'important');
+  }
 
   const wrapper = document.createElement('div');
   wrapper.className = 'field-wrapper';

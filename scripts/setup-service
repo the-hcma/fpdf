@@ -158,24 +158,23 @@ current_user=$(whoami)
 echo "👤 Enabling lingering for user: $current_user"
 loginctl enable-linger "$current_user"
 
-# 6. Detect if built code changed since the service was last started.
-# Compares the newest *.js mtime under dist/ against the service's last
-# ExecMainStartTimestamp so a `pnpm build` that doesn't touch the .service
-# file is still detected and triggers a restart.
+# 6. Detect if built code is stale relative to the current git HEAD.
+# pnpm build writes the git commit hash to dist/.build-rev; comparing that
+# against HEAD is reliable regardless of file mtimes (which git does not
+# preserve on checkout or pull).
 code_changed=false
-if [[ -d "${REPO_DIR}/dist" ]] && systemctl --user is-active --quiet fpdf.service 2>/dev/null; then
-    start_ts=$(systemctl --user show fpdf.service --property=ExecMainStartTimestamp --value 2>/dev/null || true)
-    if [[ -n "$start_ts" ]]; then
-        start_epoch=$(date -d "$start_ts" +%s 2>/dev/null || echo 0)
-        if [[ "$start_epoch" -gt 0 ]]; then
-            ref_file=$(mktemp)
-            touch -d "@${start_epoch}" "$ref_file"
-            newer_dist=$(find "${REPO_DIR}/dist" -name '*.js' -newer "$ref_file" -print -quit 2>/dev/null || true)
-            rm -f "$ref_file"
-            if [[ -n "$newer_dist" ]]; then
-                echo "🔄 Built code changed since service started — will restart."
-                code_changed=true
-            fi
+if [[ -d "${REPO_DIR}/dist" ]]; then
+    build_rev_file="${REPO_DIR}/dist/.build-rev"
+    if [[ ! -f "$build_rev_file" ]]; then
+        echo "🔨 dist/.build-rev not found — running pnpm build..."
+        pnpm --prefix "${REPO_DIR}" build
+        code_changed=true
+    else
+        built_rev=$(tr -d '[:space:]' < "$build_rev_file" 2>/dev/null || true)
+        head_rev=$(git -C "${REPO_DIR}" rev-parse HEAD 2>/dev/null || true)
+        if [[ -n "$built_rev" && -n "$head_rev" && "$built_rev" != "$head_rev" ]]; then
+            echo "🔄 dist was built at ${built_rev:0:8}, HEAD is ${head_rev:0:8} — code changed, will restart."
+            code_changed=true
         fi
     fi
 fi

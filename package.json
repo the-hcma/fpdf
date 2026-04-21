@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.json && pnpm run build:ui",
+    "build": "tsc --project tsconfig.json && pnpm run build:ui && git rev-parse HEAD > dist/.build-rev",
     "build:ui": "node scripts/build-ui.mjs",
     "typecheck": "tsc --noEmit",
     "typecheck:web": "tsc --project tsconfig.web.json --noEmit",

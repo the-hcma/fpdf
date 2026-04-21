@@ -34,8 +34,12 @@ jobs:
           # trigger a redundant CI run on an already-validated diff.
           pr_number="${{ github.event.pull_request.number }}"
           if [[ -n "$pr_number" ]]; then
-            merged=$(gh pr view "$pr_number" --repo "${{ github.repository }}" --json merged -q .merged)
-            echo "skip=$merged" >> "$GITHUB_OUTPUT"
+            state=$(gh pr view "$pr_number" --repo "${{ github.repository }}" --json state -q .state)
+            if [[ "$state" == "MERGED" ]]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi

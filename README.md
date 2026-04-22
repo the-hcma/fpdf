@@ -17,17 +17,21 @@ pnpm install
 # 2. Build (TypeScript + browser assets)
 pnpm run build
 
-# 3. Link the CLI so `fpdf` is available on your PATH
-pnpm link --global
+# 3. Run directly from the repo (no global install needed)
+./scripts/fpdf fill form.pdf --open
 
-# 4. Fill a PDF form
-fpdf fill form.pdf --open
-
-# 5. When you're done, export to a new PDF
-fpdf export form.fpdf.json -o filled.pdf
+# 4. When you're done, export to a new PDF
+./scripts/fpdf export form.fpdf.json -o filled.pdf
 ```
 
-After step 3, `fpdf` behaves identically to the globally installed package. To unlink: `pnpm unlink --global @the-hcma/fpdf`.
+Alternatively, link the CLI globally so the bare `fpdf` command works anywhere:
+
+```bash
+pnpm link --global
+fpdf fill form.pdf --open
+```
+
+To unlink: `pnpm unlink --global @the-hcma/fpdf`.
 
 ### Optional: macOS Finder app
 
@@ -59,65 +63,49 @@ The app bakes in the path to your local clone at install time. Re-run the script
 
 For Linux users, `fpdf` can be configured as a persistent background service using `systemd` user units. This allows the picker server to start automatically at boot and remain active even after you log out.
 
-#### 1. Enable lingering
-Confirm that your user manager can start at boot and remain active after logout. Replace `$USER` with the actual username that will own and run the service:
+Run the setup script from the repository root:
+
 ```bash
-loginctl enable-linger $USER
+./scripts/setup-service
 ```
 
-> [!TIP]
-> This command typically does not require `sudo` if you are enabling lingering for yourself. If run for another user, or in some restricted environments, root privileges may be required.
+The script will:
+1. Generate `~/.config/systemd/user/fpdf.service` from `etc/systemd/fpdf.service` (substituting the repo path).
+2. Enable lingering for your user so the service survives logout.
+3. Build the project if the `dist/` output is stale (`scripts/on-deploy`).
+4. Enable, start (or restart) the service.
+5. Print a status summary — including the start command, health-check URL, and log path.
 
-#### 2. Health check and Liveness
-By default, the `fpdf.service` uses `Restart=always` to ensure the process is restarted if it crashes. `fpdf` also provides a simple health check endpoint you can use to verify the server is responsive:
+No manual `systemctl` or `loginctl` commands are needed. Re-run `./scripts/setup-service` any time you update the repository to apply config changes and restart if necessary.
+
+### Verification & Troubleshooting
+
+#### Check status
+
+```bash
+./scripts/setup-service --status
+```
+
+This prints whether the service file is current, whether lingering is enabled, whether the service is active and enabled, the full start command, and the log path.
+
+#### Confirm it's reachable
+
 ```bash
 curl http://localhost:8002/health
 # Returns "ok"
 ```
 
-#### 3. Create the service unit
-The service file is provided in the repository at `scripts/systemd/fpdf.service`. We recommend **symlinking** it so that any updates to the repository (like port changes or new flags) are automatically reflected in your service configuration.
+#### Viewing logs
 
 ```bash
-mkdir -p ~/.config/systemd/user/
-ln -s $(pwd)/scripts/systemd/fpdf.service ~/.config/systemd/user/fpdf.service
-```
-
-> [!NOTE]
-> Symlinking is preferred for development. If you delete or move the repository, the service will stop working. Use `cp` instead of `ln -s` if you prefer a standalone installation.
-
-#### 3. Update the working directory
-Edit `scripts/systemd/fpdf.service` and ensure `WorkingDirectory` and `ExecStart` point to the absolute path of your `fpdf` clone.
-
-#### 4. Start and enable
-Commands for user services are run as your regular user (**no `sudo` required**):
-
-```bash
-systemctl --user daemon-reload
-systemctl --user enable fpdf
-systemctl --user start fpdf
-```
-
-Your `fpdf` instance will now be available permanently at `http://<your-ip>:8002`.
-
-### Verification & Troubleshooting
-
-#### Confirm it's running
-You can verify the service status and connectivity with these commands:
-
-```bash
-# Check process status and last few logs
-systemctl --user status fpdf
-
-# Check connectivity via the health endpoint
-curl http://localhost:8002/health
+tail -f ~/scratch/fpdf/fpdf.log
 ```
 
 #### What if it fails to restart?
 Systemd is configured to restart the service automatically if it crashes. However, if the service fails more than **5 times within 100 seconds**, systemd will stop attempting to restart it to prevent a resource-heavy failure loop.
 
 If this happens, the service will show a `failed` status. To recover:
-1. Fix the underlying issue (e.g. check logs with `journalctl --user -u fpdf -f`).
+1. Check the logs: `tail -f ~/scratch/fpdf/fpdf.log`
 2. Reset the failure counter: `systemctl --user reset-failed fpdf`
 3. Restart the service: `systemctl --user start fpdf`
 

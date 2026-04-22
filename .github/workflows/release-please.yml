@@ -28,6 +28,23 @@ jobs:
         with:
           release-type: node
 
+      - name: Assert release-please acted on releasable commits
+        # Fail loudly when a fix:/feat: commit lands but release-please neither
+        # created/updated a release PR nor published a release tag. This catches
+        # the "silent skip" that occurs when the commit message cannot be parsed
+        # (e.g. the PR body was included in the squash commit).
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          commit_title=$(git log -1 --format='%s' "${{ github.sha }}")
+          if echo "$commit_title" | grep -qE '^(feat|fix)(\([^)]*\))?!?:' && \
+             [[ "${{ steps.release.outputs.release_created }}" != "true" ]] && \
+             [[ -z "${{ steps.release.outputs.pr }}" ]]; then
+            echo "ERROR: Commit '$commit_title' looks releasable but release-please neither created a release nor opened/updated a release PR." >&2
+            echo "This usually means the commit message could not be parsed. Check that squash_merge_commit_message=BLANK is set on the repository." >&2
+            exit 1
+          fi
+
   publish-npm:
     needs: release-please
     if: ${{ needs.release-please.outputs.release_created || github.event_name == 'workflow_dispatch' }}

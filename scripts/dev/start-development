@@ -2,13 +2,24 @@
 # scripts/dev/start-development - Session initialization and worktree management
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly script_dir
+# Use the caller's git root to identify the repo, not the script's own location —
+# so the script works correctly when called from any repo or subdirectory.
+# Resolve the worktree root first (handles being inside a subdirectory), then find
+# the primary worktree from there.
+this_worktree="$(git -C "$PWD" rev-parse --show-toplevel)"
+readonly this_worktree
 # Use the primary worktree path, not --show-toplevel which returns the *current*
-# worktree root when the script is invoked from inside a linked worktree.
-main_repo="$(git -C "$script_dir" worktree list --porcelain | awk 'NR==1{print $2}')"
+# worktree root when invoked from inside a linked worktree.
+main_repo="$(git -C "$this_worktree" worktree list --porcelain | awk 'NR==1{print $2}')"
 readonly main_repo
 readonly worktrees_dir="$main_repo/.worktrees"
+# Derive repo slug (owner/name) and service name from git remote — no hardcoding.
+gh_repo="$(git -C "$main_repo" remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')"
+readonly gh_repo
+service_name="${gh_repo##*/}"
+readonly service_name
+service_unit="${HOME}/.config/systemd/user/${service_name}.service"
+readonly service_unit
 
 # Parse arguments
 resume=false
@@ -33,7 +44,7 @@ for arg in "$@"; do
 done
 
 echo "=========================================="
-echo "       fpdf Session Initialization        "
+echo "   $service_name Session Initialization   "
 echo "=========================================="
 
 # 1. Clean up stale worktree metadata
@@ -61,13 +72,20 @@ while IFS= read -r line; do
 
         echo " - Checking worktree: $current_branch ($current_path)..."
 
-        pr_state=$(timeout 15 gh --repo the-hcma/fpdf pr view "$current_branch" \
+        pr_state=$(timeout 15 gh --repo "$gh_repo" pr view "$current_branch" \
             --json state --template '{{.state}}' 2>/dev/null || echo "NOT_FOUND")
 
         if [[ "$pr_state" == "MERGED" || "$pr_state" == "CLOSED" ]]; then
+            if [[ "$current_path" == "$this_worktree" ]]; then
+                echo "   [~] PR is $pr_state but this is the running worktree; skipping removal."
+                pending_worktrees+=("$current_path|$current_branch")
+                continue
+            fi
             echo "   [!] PR is $pr_state. Removing worktree..."
             git -C "$main_repo" worktree remove --force "$current_path" 2>/dev/null || true
-            rm -rf "$current_path"
+            # Best-effort: some files (NFS locks, running scripts) may resist removal.
+            # Don't let a partial failure abort the entire session startup.
+            rm -rf "$current_path" 2>/dev/null || echo "   [~] Could not fully remove '$current_path' (files may be busy); continuing."
             git -C "$main_repo" worktree prune
             git -C "$main_repo" branch -D "$current_branch" 2>/dev/null || true
         else
@@ -117,7 +135,7 @@ while IFS= read -r branch; do
     done
     [[ "$in_worktree" == "true" ]] && continue
 
-    orphan_state=$(timeout 15 gh --repo the-hcma/fpdf pr view "$branch" \
+    orphan_state=$(timeout 15 gh --repo "$gh_repo" pr view "$branch" \
         --json state --template '{{.state}}' 2>/dev/null || echo "NOT_FOUND")
 
     if [[ "$orphan_state" == "MERGED" || "$orphan_state" == "CLOSED" ]]; then
@@ -142,8 +160,10 @@ remote_main=$(git -C "$main_repo" rev-parse origin/main)
 if [[ "$local_main" != "$remote_main" ]]; then
     echo "Main is outdated. Pulling latest..."
     git -C "$main_repo" merge --ff-only origin/main
-    echo "Restarting fpdf service..."
-    systemctl --user restart fpdf
+    if [[ -f "$service_unit" ]]; then
+        echo "Restarting $service_name service..."
+        systemctl --user restart "$service_name"
+    fi
 fi
 
 echo "=========================================="
@@ -151,15 +171,18 @@ echo "=========================================="
 # --refresh mode: also ensure service is running (start if stopped), then exit.
 # Cleanup (worktree/branch pruning, Graphite sync) has already run above.
 if [[ "$refresh" == "true" ]]; then
-    readonly service_unit="${HOME}/.config/systemd/user/fpdf.service"
     if [[ ! -f "$service_unit" ]]; then
-        echo "Service not installed. Running setup-service..."
-        "$main_repo/scripts/setup-service"
+        if [[ -x "$main_repo/scripts/setup-service" ]]; then
+            echo "Service not installed. Running setup-service..."
+            "$main_repo/scripts/setup-service"
+        else
+            echo "No service unit and no setup-service found; skipping service setup."
+        fi
     else
         systemctl --user daemon-reload
-        if ! systemctl --user is-active --quiet fpdf; then
-            echo "Starting fpdf service..."
-            systemctl --user start fpdf
+        if ! systemctl --user is-active --quiet "$service_name"; then
+            echo "Starting $service_name service..."
+            systemctl --user start "$service_name"
         fi
     fi
     exit 0

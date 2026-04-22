@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/the-hcma/fpdf/compare/v1.0.1...v1.0.2) (2026-04-22)
+
+
+### Bug Fixes
+
+* **cli:** read version and build commit from package.json and dist/.build-rev ([#300](https://github.com/the-hcma/fpdf/issues/300)) ([3496d97](https://github.com/the-hcma/fpdf/commit/3496d97f38fc4f4a9aabc72b76f1871e605ea5cc))
+
 ## [1.0.1](https://github.com/the-hcma/fpdf/compare/v1.0.0...v1.0.1) (2026-04-22)
 
 

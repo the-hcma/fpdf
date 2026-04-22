@@ -113,7 +113,9 @@ done <<< "$wt_info"
 # 3. Synchronize Graphite and prune merged branches
 echo "Synchronizing Graphite (gt sync -f -d)..."
 
-has_changes=$(git -C "$main_repo" status --porcelain)
+# Only stash *tracked* changes (ignore untracked files like .vscode/ or .worktrees/
+# which cannot be stashed without --include-untracked and would cause stash pop to fail).
+has_changes=$(git -C "$main_repo" status --porcelain | grep -v '^??' || true)
 stashed=false
 if [[ -n "$has_changes" ]]; then
     echo "Stashing local changes in main repo..."

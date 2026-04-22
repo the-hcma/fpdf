@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.3](https://github.com/the-hcma/fpdf/compare/v1.0.2...v1.0.3) (2026-04-22)
+
+
+### Bug Fixes
+
+* **dev:** make setup-service repo-agnostic ([#308](https://github.com/the-hcma/fpdf/issues/308)) ([4c919e1](https://github.com/the-hcma/fpdf/commit/4c919e105f3d66e8a8fa35a2cb35160e00b18a23))
+* **dev:** make start-development robust and repo-agnostic ([#307](https://github.com/the-hcma/fpdf/issues/307)) ([b0dd28d](https://github.com/the-hcma/fpdf/commit/b0dd28dabfa236a0119ddd6108fd2382cbc6a673))
+* **dev:** run cleanup steps before exiting in --refresh mode ([#304](https://github.com/the-hcma/fpdf/issues/304)) ([796636d](https://github.com/the-hcma/fpdf/commit/796636dac5ebc370a9fcc4ef2ff2db343423a5bb))
+
 ## [1.0.2](https://github.com/the-hcma/fpdf/compare/v1.0.1...v1.0.2) (2026-04-22)
 
 

@@ -36,39 +36,6 @@ echo "=========================================="
 echo "       fpdf Session Initialization        "
 echo "=========================================="
 
-# --refresh mode: pull main + ensure service is installed and running, then exit
-if [[ "$refresh" == "true" ]]; then
-    cd "$main_repo"
-    echo "Fetching latest remote state..."
-    git fetch origin
-    local_main=$(git rev-parse main)
-    remote_main=$(git rev-parse origin/main)
-    if [[ "$local_main" != "$remote_main" ]]; then
-        echo "Main is outdated. Pulling latest..."
-        git merge --ff-only origin/main
-    else
-        echo "Main is already up to date."
-    fi
-    readonly service_unit="${HOME}/.config/systemd/user/fpdf.service"
-    if [[ ! -f "$service_unit" ]]; then
-        echo "Service not installed. Running setup-service..."
-        "$main_repo/scripts/setup-service"
-    else
-        systemctl --user daemon-reload
-        if systemctl --user is-active --quiet fpdf; then
-            if [[ "$local_main" != "$remote_main" ]]; then
-                echo "Restarting fpdf service..."
-                systemctl --user restart fpdf
-            fi
-        else
-            echo "Starting fpdf service..."
-            systemctl --user start fpdf
-        fi
-    fi
-    echo "=========================================="
-    exit 0
-fi
-
 # 1. Clean up stale worktree metadata
 echo "Pruning stale worktree metadata..."
 git -C "$main_repo" worktree prune
@@ -180,6 +147,23 @@ if [[ "$local_main" != "$remote_main" ]]; then
 fi
 
 echo "=========================================="
+
+# --refresh mode: also ensure service is running (start if stopped), then exit.
+# Cleanup (worktree/branch pruning, Graphite sync) has already run above.
+if [[ "$refresh" == "true" ]]; then
+    readonly service_unit="${HOME}/.config/systemd/user/fpdf.service"
+    if [[ ! -f "$service_unit" ]]; then
+        echo "Service not installed. Running setup-service..."
+        "$main_repo/scripts/setup-service"
+    else
+        systemctl --user daemon-reload
+        if ! systemctl --user is-active --quiet fpdf; then
+            echo "Starting fpdf service..."
+            systemctl --user start fpdf
+        fi
+    fi
+    exit 0
+fi
 
 # 4. Determine which worktree to work in
 num_pending=${#pending_worktrees[@]}

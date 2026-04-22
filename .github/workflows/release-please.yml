@@ -11,12 +11,18 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
+      # pr is set whenever release-please opens or updates a release PR (but has
+      # not yet merged it). Exposing it lets downstream steps distinguish between
+      # "release created this run" and "release PR is pending".
+      pr: ${{ steps.release.outputs.pr }}
     permissions:
       contents: write
       pull-requests: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
+      - uses: actions/checkout@v4
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:

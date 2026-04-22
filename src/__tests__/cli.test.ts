@@ -107,6 +107,42 @@ describe('CLI program structure', () => {
     expect(program.commands).toHaveLength(6);
   });
 
+  describe('picker-mode unknown option validation', () => {
+    let errorSpy: MockInstance;
+    let exitSpy: MockInstance;
+    let savedArgv: string[];
+
+    beforeEach(() => {
+      vi.clearAllMocks();
+      savedArgv = process.argv;
+      errorSpy = vi.spyOn(logger, 'error').mockReturnValue(undefined);
+      exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation((_code?: string | number | null) => undefined as never);
+    });
+
+    afterEach(() => {
+      process.argv = savedArgv;
+      vi.restoreAllMocks();
+    });
+
+    it('exits with an error when an unrecognised long option is passed', () => {
+      process.argv = ['node', 'fpdf', '--unknown-flag'];
+      buildProgram().parse(['node', 'fpdf', '--unknown-flag']);
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Unknown option: '--unknown-flag'"),
+      );
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+
+    it('exits with an error when an unrecognised short option is passed', () => {
+      process.argv = ['node', 'fpdf', '-v'];
+      buildProgram().parse(['node', 'fpdf', '-v']);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Unknown option: '-v'"));
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    });
+  });
+
   describe('export command action', () => {
     let infoSpy: MockInstance;
     let errorSpy: MockInstance;

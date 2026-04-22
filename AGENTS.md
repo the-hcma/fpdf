@@ -101,6 +101,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - Submit stacks with `gt submit --no-interactive` — do not open PRs manually via the GitHub UI.
 - After submitting, always mark PRs as ready for review: `gh pr ready <number>`. `gt submit --no-interactive` creates drafts by default.
 - To merge a PR, add the `merge-it` label: `gh pr edit <number> --add-label merge-it`. Never use `gh pr merge` directly.
+- **Always ask the user for confirmation before adding the `merge-it` label.** Adding it triggers an automated merge; it must not be applied without explicit user approval.
 - Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
 - **All commits must be GPG-signed.** Ensure `commit.gpgsign = true` is set in git config and the signing key is uploaded to GitHub (Settings → SSH and GPG keys) so commits show as "Verified".
 - Each commit must pass `pnpm run check` (type-check + lint + format check) and `pnpm test`.

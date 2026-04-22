@@ -123,3 +123,15 @@ jobs:
             echo "ERROR: --help output does not contain 'Usage:'" >&2
             exit 1
           fi
+
+      - name: npx --version smoke test
+        shell: bash
+        run: |
+          version="${{ needs.publish-npm.outputs.published_version }}"
+          output=$(npx --yes @the-hcma/fpdf@"${version}" --version 2>&1)
+          echo "$output"
+          # Require output to be exactly "<version>" or "<version> (<hash>)" — nothing else.
+          if ! echo "$output" | grep -qE "^${version}( \([0-9a-f]+\))?$"; then
+            echo "ERROR: --version output '${output}' does not match expected pattern '${version} [(<hash>)]'" >&2
+            exit 1
+          fi

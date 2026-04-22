@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
@@ -180,8 +181,21 @@ async function startServerRestarting(
 export function buildProgram(): Command {
   installWarnFilter();
   const program = new Command();
+  const require = createRequire(import.meta.url);
+  const { version } = require('../package.json') as { version: string };
+  const buildRevPath = new URL('../dist/.build-rev', import.meta.url);
+  let buildRev = '';
+  try {
+    buildRev = readFileSync(buildRevPath, 'utf8').trim().slice(0, 7);
+  } catch {
+    // not present when running from source without a build
+  }
+  const versionString = buildRev ? `${version} (${buildRev})` : version;
 
-  program.name('fpdf').description('Fill PDF forms via a local browser overlay').version('0.1.0');
+  program
+    .name('fpdf')
+    .description('Fill PDF forms via a local browser overlay')
+    .version(versionString);
 
   program
     .command('fill <file>')
@@ -532,7 +546,7 @@ export function buildProgram(): Command {
     const pickerKnownFlags = new Set(['--open', '--listen-all', '--port']);
     for (let i = 2; i < argv.length; i++) {
       const arg = argv[i];
-      if (arg?.startsWith('--') !== true) continue;
+      if (!arg?.startsWith('-')) continue;
       if (!pickerKnownFlags.has(arg)) {
         logger.error(`Unknown option: '${arg}'. Run 'fpdf --help' for usage.`);
         process.exit(1);

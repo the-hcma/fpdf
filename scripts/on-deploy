@@ -1,0 +1,52 @@
+#!/bin/bash
+# scripts/on-deploy — repo-specific deploy hook called by scripts/setup-service.
+#
+# Responsibilities:
+#   1. Detect whether the built artefacts are stale relative to the current
+#      git HEAD (by comparing dist/.build-rev to HEAD).
+#   2. Rebuild via pnpm if stale.
+#   3. Print the installed version for operator confirmation.
+#
+# Exit code contract (consumed by scripts/setup-service):
+#   0  — code was rebuilt; setup-service will restart the systemd service.
+#   1  — nothing changed; setup-service will skip the restart.
+#   2+ — unexpected failure; setup-service aborts (set -euo pipefail).
+
+set -euo pipefail
+
+repo_dir="$(git -C "$PWD" rev-parse --show-toplevel)"
+readonly repo_dir
+service_name="$(basename "$repo_dir")"
+readonly service_name
+
+build_rev_file="${repo_dir}/dist/.build-rev"
+code_changed=false
+
+if [[ ! -d "${repo_dir}/dist" || ! -f "$build_rev_file" ]]; then
+    echo "🔨 dist/.build-rev not found — running pnpm build..."
+    pnpm --prefix "${repo_dir}" build
+    code_changed=true
+else
+    built_rev="$(tr -d '[:space:]' < "$build_rev_file")"
+    head_rev="$(git -C "${repo_dir}" rev-parse HEAD)"
+    if [[ "$built_rev" != "$head_rev" ]]; then
+        echo "🔄 dist built at ${built_rev:0:8}, HEAD is ${head_rev:0:8} — rebuilding..."
+        pnpm --prefix "${repo_dir}" build
+        code_changed=true
+    fi
+fi
+
+# Print installed version
+pkg_version="$(node -p "require('${repo_dir}/package.json').version" 2>/dev/null || echo "unknown")"
+if [[ -f "$build_rev_file" ]]; then
+    built_rev="$(tr -d '[:space:]' < "$build_rev_file")"
+    echo "📦 ${service_name} v${pkg_version} (commit ${built_rev:0:8})"
+else
+    echo "📦 ${service_name} v${pkg_version}"
+fi
+
+if [[ "$code_changed" == "true" ]]; then
+    exit 0
+else
+    exit 1
+fi

@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.1](https://github.com/the-hcma/fpdf/compare/v1.0.0...v1.0.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* **cli:** resolve symlinks when detecting entry point for npx compatibility ([#289](https://github.com/the-hcma/fpdf/issues/289)) ([72be836](https://github.com/the-hcma/fpdf/commit/72be836b8a6ba45f4dfadab39b3e74b1e5e4c3e2))
+* **ci:** add checkout step and expose pr output in release-please job ([#293](https://github.com/the-hcma/fpdf/issues/293)) ([3073728](https://github.com/the-hcma/fpdf/commit/30737285e072e5882e4ad82f741fe085d0988cad))
+* **ci:** fail loudly when release-please skips a releasable commit ([#294](https://github.com/the-hcma/fpdf/issues/294)) ([668d68d](https://github.com/the-hcma/fpdf/commit/668d68dec70372ac4cebd363dae8c91a206147f4))
+* **ci:** remove branches-ignore so CI re-runs after Graphite restack ([#297](https://github.com/the-hcma/fpdf/issues/297)) ([13ad0f4](https://github.com/the-hcma/fpdf/commit/13ad0f498aecc6eb59227b768de6d2a778b6b468))
+* **dev:** skip untracked files when stashing in start-development ([#292](https://github.com/the-hcma/fpdf/issues/292)) ([162e8d2](https://github.com/the-hcma/fpdf/commit/162e8d252ed49f5c195164a57409b75a757105b0))
+
 ## 1.0.0 (2026-04-21)
 
 

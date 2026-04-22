@@ -1,6 +1,6 @@
 {
   "name": "@the-hcma/fpdf",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI tool to fill PDF forms via a local browser overlay",
   "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {

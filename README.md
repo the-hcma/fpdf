@@ -69,7 +69,8 @@ For Linux users, `fpdf` can be configured as a persistent background service usi
 Run the setup script from [repository-helpers](https://github.com/the-hcma/repository-helpers):
 
 ```bash
-~/work/ai/repository-helpers/scripts/setup-service
+export REPO_HELPERS=/path/to/repository-helpers
+$REPO_HELPERS/scripts/setup-service
 ```
 
 The script will:
@@ -79,14 +80,14 @@ The script will:
 4. Enable, start (or restart) the service.
 5. Print a status summary — including the start command, health-check URL, and log path.
 
-No manual `systemctl` or `loginctl` commands are needed. Re-run `~/work/ai/repository-helpers/scripts/setup-service` any time you update the repository to apply config changes and restart if necessary.
+No manual `systemctl` or `loginctl` commands are needed. Re-run `$REPO_HELPERS/scripts/setup-service` any time you update the repository to apply config changes and restart if necessary.
 
 ### Verification & Troubleshooting
 
 #### Check status
 
 ```bash
-~/work/ai/repository-helpers/scripts/setup-service --status
+$REPO_HELPERS/scripts/setup-service --status
 ```
 
 This prints whether the service file is current, whether lingering is enabled, whether the service is active and enabled, the full start command, and the log path.

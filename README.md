@@ -69,7 +69,7 @@ For Linux users, `fpdf` can be configured as a persistent background service usi
 Run the setup script from [repository-helpers](https://github.com/the-hcma/repository-helpers):
 
 ```bash
-export REPO_HELPERS=/path/to/repository-helpers
+export REPO_HELPERS=/path/to/repository-helpers  # optional: set once for convenience
 $REPO_HELPERS/scripts/setup-service
 ```
 

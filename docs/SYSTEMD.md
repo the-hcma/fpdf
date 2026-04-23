@@ -11,7 +11,7 @@ via lingering, and is managed using the `setup-service` script from
 
 - systemd user session available (`systemctl --user status` returns output)
 - [`repository-helpers`](https://github.com/the-hcma/repository-helpers) cloned locally
-- `REPO_HELPERS` set to its path: `export REPO_HELPERS=/path/to/repository-helpers`
+- `REPO_HELPERS` set to its path (optional convenience): `export REPO_HELPERS=/path/to/repository-helpers`
 - fpdf dependencies installed (`pnpm install`)
 
 ## Install the Service

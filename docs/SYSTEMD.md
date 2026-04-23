@@ -10,7 +10,8 @@ via lingering, and is managed using the `setup-service` script from
 ## Prerequisites
 
 - systemd user session available (`systemctl --user status` returns output)
-- `~/work/ai/repository-helpers` cloned locally
+- [`repository-helpers`](https://github.com/the-hcma/repository-helpers) cloned locally
+- `REPO_HELPERS` set to its path (optional convenience): `export REPO_HELPERS=/path/to/repository-helpers`
 - fpdf dependencies installed (`pnpm install`)
 
 ## Install the Service
@@ -18,7 +19,7 @@ via lingering, and is managed using the `setup-service` script from
 Run `setup-service` from the fpdf repo directory:
 
 ```bash
-~/work/ai/repository-helpers/scripts/setup-service
+$REPO_HELPERS/scripts/setup-service
 ```
 
 This will:
@@ -34,7 +35,7 @@ This will:
 ## Check Status
 
 ```bash
-~/work/ai/repository-helpers/scripts/setup-service --status
+$REPO_HELPERS/scripts/setup-service --status
 ```
 
 Or use systemctl directly:
@@ -72,14 +73,14 @@ Run `setup-service` again — it re-runs `on-deploy` (which rebuilds `dist/` if
 the git SHA changed) and restarts the service only when necessary:
 
 ```bash
-~/work/ai/repository-helpers/scripts/setup-service
+$REPO_HELPERS/scripts/setup-service
 ```
 
 At the start of each development session, `start-development --refresh`
 handles this automatically:
 
 ```bash
-~/work/ai/repository-helpers/scripts/dev/start-development --refresh
+$REPO_HELPERS/scripts/dev/start-development --refresh
 ```
 
 ## Service Configuration

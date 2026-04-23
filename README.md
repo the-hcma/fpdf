@@ -1,6 +1,9 @@
 # fpdf
 
 [![npm version](https://img.shields.io/npm/v/@the-hcma/fpdf)](https://www.npmjs.com/package/@the-hcma/fpdf)
+[![CI](https://github.com/the-hcma/fpdf/actions/workflows/ci.yml/badge.svg)](https://github.com/the-hcma/fpdf/actions/workflows/ci.yml)
+[![Node.js ≥ 20](https://img.shields.io/badge/node-%E2%89%A520-brightgreen)](https://nodejs.org/)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm--Noncommercial-blue)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 
 Fill PDF forms interactively in your browser, then export a completed PDF — all from the command line.
 

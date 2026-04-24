@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # scripts/on-deploy — repo-specific deploy hook called by scripts/setup-service.
 #
 # Responsibilities:
@@ -11,12 +11,22 @@
 #   0  — code was rebuilt; setup-service will restart the systemd service.
 #   1  — nothing changed; setup-service will skip the restart.
 #   2+ — unexpected failure; setup-service aborts (set -euo pipefail).
+#
+# Worktree behaviour: repo_dir is resolved from BASH_SOURCE[0] so this script
+# always operates on the worktree it lives in, regardless of the caller's $PWD.
+# This is required for setup-service to correctly deploy feature worktrees.
 
 set -euo pipefail
 
-repo_dir="$(git -C "$PWD" rev-parse --show-toplevel)"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly script_dir
+repo_dir="$(cd "$script_dir/.." && pwd)"
 readonly repo_dir
-service_name="$(basename "$repo_dir")"
+# Derive service name from the git remote URL — stable across all worktrees
+# regardless of directory name (mirrors setup-service's approach).
+gh_remote="$(git -C "$repo_dir" remote get-url origin | sed 's|.*github.com[:/]||;s|\.git$||')"
+readonly gh_remote
+service_name="${gh_remote##*/}"
 readonly service_name
 
 build_rev_file="${repo_dir}/dist/.build-rev"

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/the-hcma/fpdf/compare/v1.0.3...v1.0.4) (2026-04-24)
+
+
+### Bug Fixes
+
+* resolve repo_dir from BASH_SOURCE[0] in on-deploy for worktree support ([#316](https://github.com/the-hcma/fpdf/issues/316)) ([78941cc](https://github.com/the-hcma/fpdf/commit/78941cc5df85dd898a0fcea20d67e1b686da4ec5))
+
 ## [1.0.3](https://github.com/the-hcma/fpdf/compare/v1.0.2...v1.0.3) (2026-04-22)
 
 

@@ -837,7 +837,9 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   });
 
   // --- Static UI assets ---
-  const publicDir = path.join(path.dirname(new URL(import.meta.url).pathname), 'public');
+  // Use _serverDir (derived via fileURLToPath) so the path is valid on Windows
+  // where new URL(import.meta.url).pathname returns /C:/... with a leading slash.
+  const publicDir = path.join(_serverDir, 'public');
   // Disable automatic index.html serving so the catch-all below can decide
   // which shell to serve based on whether a PDF has been loaded.
   // HTML and JS files get Cache-Control: no-cache so browsers always revalidate

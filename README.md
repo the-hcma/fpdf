@@ -9,6 +9,28 @@ Fill PDF forms interactively in your browser, then export a completed PDF — al
 
 `fpdf` spawns a local web server, renders your PDF via PDF.js, and overlays precisely-positioned HTML inputs over each form field. Changes are live-synced to a portable `.fpdf.json` file you can edit by hand, share, or resume later.
 
+## Quickstart (via npx — no install needed)
+
+The easiest way to run `fpdf` on any platform (macOS, Linux, Windows) with Node.js ≥ 20:
+
+```bash
+# Launch the file picker — select a PDF and start filling right in your browser
+npx @the-hcma/fpdf
+
+# Or go straight to a specific file
+npx @the-hcma/fpdf fill form.pdf --open
+
+# Export filled values to a new PDF
+npx @the-hcma/fpdf export form.fpdf.json -o filled.pdf
+```
+
+Running `npx @the-hcma/fpdf` with no arguments opens a local file-picker UI in your browser — the simplest way to get started without typing a file path.
+
+`npx` downloads and caches the package on first run. No global installation required.
+Pin to a specific version with `npx @the-hcma/fpdf@1.0.3`, or always pull the latest with `npx @the-hcma/fpdf@latest`.
+
+For all commands and options, see the [Usage](#usage) section below.
+
 ## Quickstart (from source)
 
 ```bash

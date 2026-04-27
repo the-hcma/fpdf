@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.5](https://github.com/the-hcma/fpdf/compare/v1.0.4...v1.0.5) (2026-04-27)
+
+
+### Bug Fixes
+
+* resolve public dir with fileURLToPath for Windows compatibility ([#322](https://github.com/the-hcma/fpdf/issues/322)) ([d123b0d](https://github.com/the-hcma/fpdf/commit/d123b0d))
+
+
+### Documentation
+
+* add npx quickstart and file-picker callout to README ([#322](https://github.com/the-hcma/fpdf/issues/322))
+
 ## [1.0.4](https://github.com/the-hcma/fpdf/compare/v1.0.3...v1.0.4) (2026-04-24)
 
 

@@ -5,6 +5,16 @@
 
 ### Bug Fixes
 
+* **ci:** allow manual workflow_dispatch publish when release-please is unavailable ([6cefdcc](https://github.com/the-hcma/fpdf/commit/6cefdcc43eb201527c9ac3505ba513e4ba97428e))
+* **ci:** allow manual workflow_dispatch publish when release-please is unavailable ([be26e98](https://github.com/the-hcma/fpdf/commit/be26e985b28ed960f3823b6677dc44136e1c9c14))
+* resolve public dir with fileURLToPath for Windows compatibility ([4c808d8](https://github.com/the-hcma/fpdf/commit/4c808d8894c3f932f306c1bfafee4001ff1386c9))
+* resolve public dir with fileURLToPath for Windows compatibility ([d123b0d](https://github.com/the-hcma/fpdf/commit/d123b0d4a89a86813b8df626fbebf88c43a37782))
+
+## [1.0.5](https://github.com/the-hcma/fpdf/compare/v1.0.4...v1.0.5) (2026-04-27)
+
+
+### Bug Fixes
+
 * resolve public dir with fileURLToPath for Windows compatibility ([#322](https://github.com/the-hcma/fpdf/issues/322)) ([d123b0d](https://github.com/the-hcma/fpdf/commit/d123b0d))
 
 

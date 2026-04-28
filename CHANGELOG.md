@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.6](https://github.com/the-hcma/fpdf/compare/v1.0.5...v1.0.6) (2026-04-28)
+
+
+### Bug Fixes
+
+* **ci:** use env vars in assert step to avoid shell injection ([#332](https://github.com/the-hcma/fpdf/issues/332)) ([ffdc843](https://github.com/the-hcma/fpdf/commit/ffdc84365d05f5a0a0b3ef6306d02543763cddfe))
+
 ## [1.0.5](https://github.com/the-hcma/fpdf/compare/v1.0.4...v1.0.5) (2026-04-27)
 
 

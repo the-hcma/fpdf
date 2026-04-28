@@ -44,11 +44,15 @@ jobs:
         # (e.g. the PR body was included in the squash commit).
         if: github.event_name == 'push'
         shell: bash
+        env:
+          RELEASE_CREATED: ${{ steps.release.outputs.release_created }}
+          RELEASE_PR: ${{ steps.release.outputs.pr }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
-          commit_title=$(git log -1 --format='%s' "${{ github.sha }}")
+          commit_title=$(git log -1 --format='%s' "$COMMIT_SHA")
           if echo "$commit_title" | grep -qE '^(feat|fix)(\([^)]*\))?!?:' && \
-             [[ "${{ steps.release.outputs.release_created }}" != "true" ]] && \
-             [[ -z "${{ steps.release.outputs.pr }}" ]]; then
+             [[ "$RELEASE_CREATED" != "true" ]] && \
+             [[ -z "$RELEASE_PR" ]]; then
             echo "ERROR: Commit '$commit_title' looks releasable but release-please neither created a release nor opened/updated a release PR." >&2
             echo "This usually means the commit message could not be parsed. Check that squash_merge_commit_message=BLANK is set on the repository." >&2
             exit 1

@@ -6,7 +6,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ## Session Startup & Cleanup
 
-- **Mandatory Action**: At the beginning of every session (before starting any task), run `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers).
+- **Mandatory Action**: At the beginning of every session (before starting any task), run `/a_star/home/hcma/work/ai/repository-helpers/scripts/dev/start-development`.
 - This script cleans up merged worktrees, prunes stale metadata, and runs `gt sync --force` to keep your local environment synchronized with the remote.
 - By default it prompts for a new stack name and creates a new worktree under `.worktrees/<stack-name>-wt` ready for work.
 - Pass `--resume` to instead pick up an existing in-progress worktree: it lists pending worktrees and lets you select one (or creates a new one if none exist).
@@ -91,7 +91,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 > See [GRAPHITE.md](./GRAPHITE.md) for the full Graphite workflow reference (branch naming, stack creation, navigation, submission, troubleshooting, and advanced rebasing).
 
 - This project uses **Graphite** (`gt`) for branch stacking.
-- **Worktree-per-Stack**: Every new stack/PR must be created in its own Git worktree to ensure isolation. Use `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers) — it handles worktree creation and Graphite tracking automatically.
+- **Worktree-per-Stack**: Every new stack/PR must be created in its own Git worktree to ensure isolation. Use `/a_star/home/hcma/work/ai/repository-helpers/scripts/dev/start-development` — it handles worktree creation and Graphite tracking automatically.
 - All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
 - Never work directly on `main`. Always create a stack branch: `gt create -m "feat: description"`.
 - Keep each branch in the stack focused on exactly one logical change. Stacks should map 1-to-1 with milestones or sub-tasks from [PLAN.md](./PLAN.md).

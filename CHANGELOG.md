@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/the-hcma/fpdf/compare/v1.0.6...v1.1.0) (2026-04-29)
+
+
+### Features
+
+* auto-open browser with display detection and headless fallback ([ec6d77b](https://github.com/the-hcma/fpdf/commit/ec6d77b4d28412abe7fd937b9b4eae4166f7d171))
+
 ## [1.0.6](https://github.com/the-hcma/fpdf/compare/v1.0.5...v1.0.6) (2026-04-28)
 
 

@@ -9,162 +9,40 @@ Fill PDF forms interactively in your browser, then export a completed PDF — al
 
 `fpdf` spawns a local web server, renders your PDF via PDF.js, and overlays precisely-positioned HTML inputs over each form field. Changes are live-synced to a portable `.fpdf.json` file you can edit by hand, share, or resume later.
 
-## Quickstart (via npx — no install needed)
+## Get started
 
-The easiest way to run `fpdf` on any platform (macOS, Linux, Windows) with Node.js ≥ 20:
+> **Requires Node.js ≥ 20.** See [Installing Node.js](#installing-nodejs) if you don't have it yet.
 
 ```bash
-# Launch the file picker — select a PDF and start filling right in your browser
+# Open the file picker — your browser opens automatically
 npx @the-hcma/fpdf
 
 # Or go straight to a specific file
-npx @the-hcma/fpdf fill form.pdf --open
-
-# Export filled values to a new PDF
-npx @the-hcma/fpdf export form.fpdf.json -o filled.pdf
-```
-
-Running `npx @the-hcma/fpdf` with no arguments opens a local file-picker UI in your browser — the simplest way to get started without typing a file path.
-
-`npx` downloads and caches the package on first run. No global installation required.
-Pin to a specific version with `npx @the-hcma/fpdf@1.0.3`, or always pull the latest with `npx @the-hcma/fpdf@latest`.
-
-For all commands and options, see the [Usage](#usage) section below.
-
-## Quickstart (from source)
-
-```bash
-# 1. Clone and install dependencies
-git clone https://github.com/the-hcma/fpdf.git
-cd fpdf
-pnpm install
-
-# 2. Build (TypeScript + browser assets)
-pnpm run build
-
-# 3. Run directly from the repo (no global install needed)
-./scripts/fpdf fill form.pdf --open
-
-# 4. When you're done, export to a new PDF
-./scripts/fpdf export form.fpdf.json -o filled.pdf
-```
-
-Alternatively, link the CLI globally so the bare `fpdf` command works anywhere:
-
-```bash
-pnpm link --global
-fpdf fill form.pdf --open
-```
-
-To unlink: `pnpm unlink --global @the-hcma/fpdf`.
-
-### Optional: macOS Finder app
-
-After completing the steps above you can install a double-clickable `fpdf.app` that opens fpdf in your browser directly from Finder:
-
-```bash
-./scripts/install-fpdf
-```
-
-This installs `fpdf.app` to `/Applications`. Double-clicking it starts the local server in the background and launches the file picker in your default browser. The server shuts down automatically when the browser tab is closed.
-
-To install for the current user only:
-
-```bash
-./scripts/install-fpdf --dest ~/Applications
-```
-
-To remove:
-
-```bash
-./scripts/install-fpdf --remove
-# or, if installed to ~/Applications:
-./scripts/install-fpdf --remove --dest ~/Applications
-```
-
-The app bakes in the path to your local clone at install time. Re-run the script if you move the repo.
-
-### Optional: Persistent Service (Linux systemd)
-
-For Linux users, `fpdf` can be configured as a persistent background service using `systemd` user units. This allows the picker server to start automatically at boot and remain active even after you log out.
-
-Run the setup script from [repository-helpers](https://github.com/the-hcma/repository-helpers):
-
-```bash
-export REPO_HELPERS=/path/to/repository-helpers  # optional: set once for convenience
-$REPO_HELPERS/scripts/setup-service
-```
-
-The script will:
-1. Generate `~/.config/systemd/user/fpdf.service` from `etc/systemd/fpdf.service` (substituting the repo path).
-2. Enable lingering for your user so the service survives logout.
-3. Build the project if the `dist/` output is stale (`scripts/on-deploy`).
-4. Enable, start (or restart) the service.
-5. Print a status summary — including the start command, health-check URL, and log path.
-
-No manual `systemctl` or `loginctl` commands are needed. Re-run `$REPO_HELPERS/scripts/setup-service` any time you update the repository to apply config changes and restart if necessary.
-
-### Verification & Troubleshooting
-
-#### Check status
-
-```bash
-$REPO_HELPERS/scripts/setup-service --status
-```
-
-This prints whether the service file is current, whether lingering is enabled, whether the service is active and enabled, the full start command, and the log path.
-
-#### Confirm it's reachable
-
-```bash
-curl http://localhost:8002/health
-# Returns "ok"
-```
-
-#### Viewing logs
-
-```bash
-tail -f ~/scratch/fpdf/fpdf.log
-```
-
-#### What if it fails to restart?
-Systemd is configured to restart the service automatically if it crashes. However, if the service fails more than **5 times within 100 seconds**, systemd will stop attempting to restart it to prevent a resource-heavy failure loop.
-
-If this happens, the service will show a `failed` status. To recover:
-1. Check the logs: `tail -f ~/scratch/fpdf/fpdf.log`
-2. Reset the failure counter: `systemctl --user reset-failed fpdf`
-3. Restart the service: `systemctl --user start fpdf`
-
-## Requirements
-
-- Node.js ≥ 20 LTS
-- macOS (for the optional Finder app — requires Xcode Command Line Tools: `xcode-select --install`)
-
-## Installation
-
-Run `fpdf` directly without installing it globally using `npx`:
-
-```bash
-# Show all commands and options
-npx @the-hcma/fpdf --help
-
-# Fill a form (opens the browser UI)
 npx @the-hcma/fpdf fill form.pdf
 
-# Fill and auto-open in the default browser
-npx @the-hcma/fpdf fill form.pdf --open
-
 # Export filled values to a new PDF
 npx @the-hcma/fpdf export form.fpdf.json -o filled.pdf
-
-# Pin to a specific version
-npx @the-hcma/fpdf@1.0.1 fill form.pdf
-
-# Always pull the latest published version
-npx @the-hcma/fpdf@latest fill form.pdf
 ```
 
-Alternatively, install it globally to use the `fpdf` command directly:
+`npx` downloads and caches the package on first run — no global installation required. On headless servers (no display detected) fpdf skips the browser launch and prints the URL to open manually. Pass `--no-open` to suppress auto-open explicitly.
+
+Pin to a specific version with `npx @the-hcma/fpdf@1.0.3`, or always pull the latest with `npx @the-hcma/fpdf@latest`.
+
+### Installing Node.js
+
+**macOS** — install [Homebrew](https://brew.sh/) then: `brew install node`
+
+**Windows** — install [nvm-windows](https://github.com/coreybutler/nvm-windows/releases), then in PowerShell: `nvm install lts && nvm use lts`
+
+**Linux (Ubuntu/Debian)**
+```bash
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+## Global install (optional)
+
+To use the bare `fpdf` command without typing `npx @the-hcma/fpdf` every time:
 
 ```bash
 npm install -g @the-hcma/fpdf
@@ -172,17 +50,37 @@ npm install -g @the-hcma/fpdf
 pnpm add -g @the-hcma/fpdf
 ```
 
-To build from source instead, see the [Quickstart](#quickstart-from-source).
+Then just run `fpdf` anywhere:
 
-## Usage
+```bash
+fpdf                        # open the file picker
+fpdf fill form.pdf          # go straight to a file
+fpdf export form.fpdf.json  # export to PDF
+```
 
-If you used `npx` above, simply replace `fpdf` with `npx @the-hcma/fpdf` in the commands below.
+## Filling a form
+
+1. **Open a PDF** — the file picker lists PDFs in the current directory. Click one to start a session, or run `fpdf fill form.pdf` to skip the picker.
+2. **Click a field and type** — fpdf overlays interactive inputs over every detected form field.
+3. **Right-click anywhere on the page** for a context menu:
+   - **Add field here** — draw a new text field at the cursor position.
+   - **Duplicate field** — copy the selected field with a small offset.
+   - **Name field** — assign a label stored in the `.fpdf.json` session file.
+   - **Text alignment** — left, center, right, or justified (cascading submenu); alignment is preserved on export.
+   - **Delete field** — remove a manually-added or candidate field.
+4. **Export when done** — click **Export PDF** in the toolbar to download a flattened, print-ready PDF. Click **Save AcroForm** for an editable PDF that keeps fields interactive in any standard PDF viewer.
+
+The toolbar also provides: dark/light mode toggle, show/hide field boundaries, zoom, copy PDF path, and clear all fields (with one-step undo). See [UI features](#ui-features) for details.
+
+## Commands
+
+If you used `npx` above, replace `fpdf` with `npx @the-hcma/fpdf` in the commands below.
 
 ```bash
 # Start an interactive fill session (auto-resumes from .fpdf.json if one exists)
 fpdf fill form.pdf
-fpdf fill form.pdf --open           # auto-launch browser
-fpdf fill form.pdf --fresh          # ignore saved session, re-analyze from scratch
+fpdf fill form.pdf --no-open          # suppress the browser auto-open
+fpdf fill form.pdf --fresh            # ignore saved session, re-analyze from scratch
 
 # Resume from a specific session file
 fpdf fill form.pdf --json form.fpdf.json
@@ -199,9 +97,7 @@ fpdf save-acroform form.pdf
 fpdf save-acroform form.pdf -o editable.pdf
 ```
 
-`fpdf fill` prints a local URL (e.g. `http://127.0.0.1:51234`) to stdout. Open it in any browser to start filling. The server binds to `127.0.0.1` only and uses an OS-assigned port.
-
-Run `fpdf --help` to see all commands and their options in one view, or `fpdf <command> --help` for details on a specific command.
+Run `fpdf --help` or `fpdf <command> --help` for full options.
 
 ## Session file: `.fpdf.json`
 
@@ -307,7 +203,91 @@ Open the browser's print dialog while filling to print the completed form at 1:1
 
 ## Development
 
-See the [Quickstart](#quickstart-from-source) to get a local build running.
+### Building from source
+
+```bash
+# 0. Enable pnpm (one-time setup, requires Node.js ≥ 20)
+corepack enable pnpm
+
+# 1. Clone and install dependencies
+git clone https://github.com/the-hcma/fpdf.git
+cd fpdf
+pnpm install
+
+# 2. Build (TypeScript + browser assets)
+pnpm run build
+
+# 3. Run directly from the repo
+./scripts/fpdf fill form.pdf
+
+# 4. Export a completed PDF
+./scripts/fpdf export form.fpdf.json -o filled.pdf
+```
+
+Link globally to use the bare `fpdf` command anywhere:
+
+```bash
+pnpm link --global
+fpdf fill form.pdf
+```
+
+To unlink: `pnpm unlink --global @the-hcma/fpdf`.
+
+### Optional: macOS Finder app
+
+Install a double-clickable `fpdf.app` that opens fpdf in your browser directly from Finder:
+
+```bash
+./scripts/install-fpdf
+```
+
+This installs `fpdf.app` to `/Applications`. Double-clicking it starts the local server in the background and launches the file picker in your default browser. The server shuts down automatically when the browser tab is closed.
+
+To install for the current user only: `./scripts/install-fpdf --dest ~/Applications`
+
+To remove: `./scripts/install-fpdf --remove` (add `--dest ~/Applications` if installed there)
+
+The app bakes in the path to your local clone at install time. Re-run the script if you move the repo. Also requires Xcode Command Line Tools: `xcode-select --install`
+
+### Optional: Persistent service (Linux systemd)
+
+`fpdf` can run as a persistent background service that starts automatically at boot and survives logout. Run the setup script from [repository-helpers](https://github.com/the-hcma/repository-helpers):
+
+```bash
+export REPO_HELPERS=/path/to/repository-helpers
+$REPO_HELPERS/scripts/setup-service
+```
+
+The script generates the systemd unit, enables lingering, builds if needed, and starts the service. Re-run it any time you update the repository.
+
+#### Check status
+
+```bash
+$REPO_HELPERS/scripts/setup-service --status
+```
+
+#### Confirm it's reachable
+
+```bash
+curl http://localhost:8002/health
+# Returns "ok"
+```
+
+#### Viewing logs
+
+```bash
+tail -f ~/scratch/fpdf/fpdf.log
+```
+
+#### What if it fails to restart?
+
+If the service fails more than **5 times within 100 seconds**, systemd stops retrying. To recover:
+
+1. Check the logs: `tail -f ~/scratch/fpdf/fpdf.log`
+2. Reset the failure counter: `systemctl --user reset-failed fpdf`
+3. Restart the service: `systemctl --user start fpdf`
+
+### Dev commands
 
 ```bash
 pnpm run build          # compile TypeScript + bundle browser assets

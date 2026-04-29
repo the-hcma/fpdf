@@ -78,13 +78,14 @@ describe('CLI program structure', () => {
     expect(exp).toBeDefined();
   });
 
-  it('fill command has --open flag defaulting to false', () => {
+  it('fill command has --no-open flag and open defaults to true', () => {
     const program = buildProgram();
     const fill = program.commands.find((c) => c.name() === 'fill');
     expect(fill).toBeDefined();
-    const opt = fill?.options.find((o) => o.long === '--open');
+    // Commander negatable option: --no-open sets open to false; default is true
+    const opt = fill?.options.find((o) => o.long === '--no-open');
     expect(opt).toBeDefined();
-    expect(opt?.defaultValue).toBe(false);
+    expect(fill?.getOptionValue('open')).toBe(true);
   });
 
   it('fill command has --json option', () => {
@@ -403,7 +404,48 @@ describe('CLI program structure', () => {
       stdoutSpy.mockRestore();
     });
 
-    it('opens the browser when --open is passed', async () => {
+    it('opens the browser automatically when a display is available', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const openModule = await import('open');
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      });
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      // Simulate a display being present on Linux
+      const savedPlatform = process.platform;
+      const savedDisplay = process.env.DISPLAY;
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      process.env.DISPLAY = ':0';
+
+      try {
+        const program = buildProgram();
+        program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(openModule.default).toHaveBeenCalledWith('http://127.0.0.1:12345');
+      } finally {
+        Object.defineProperty(process, 'platform', { value: savedPlatform, configurable: true });
+        if (savedDisplay === undefined) delete process.env.DISPLAY;
+        else process.env.DISPLAY = savedDisplay;
+      }
+    });
+
+    it('does not open the browser when --no-open is passed', async () => {
       const { analyzePdf } = await import('../analyzer.js');
       const { startServer } = await import('../server.js');
       const openModule = await import('open');
@@ -427,10 +469,56 @@ describe('CLI program structure', () => {
       });
 
       const program = buildProgram();
-      program.parse(['node', 'fpdf', 'fill', 'form.pdf', '--open']);
+      program.parse(['node', 'fpdf', 'fill', 'form.pdf', '--no-open']);
       await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(openModule.default).toHaveBeenCalledWith('http://127.0.0.1:12345');
+      expect(openModule.default).not.toHaveBeenCalled();
+    });
+
+    it('logs a headless hint instead of opening when no display is detected', async () => {
+      const { analyzePdf } = await import('../analyzer.js');
+      const { startServer } = await import('../server.js');
+      const openModule = await import('open');
+      vi.mocked(analyzePdf).mockResolvedValue({
+        metadata: {
+          version: '1.0',
+          originalPdf: '/abs/form.pdf',
+          pdfFilename: 'form.pdf',
+          pdfHash: 'sha256:abc',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+          pageCount: 1,
+        },
+        pages: [],
+      });
+      vi.mocked(startServer).mockResolvedValue({
+        url: 'http://127.0.0.1:12345',
+        networkUrls: ['http://127.0.0.1:12345'],
+        ownerToken: null,
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+
+      // Simulate headless Linux: no DISPLAY or WAYLAND_DISPLAY
+      const savedPlatform = process.platform;
+      const savedDisplay = process.env.DISPLAY;
+      const savedWayland = process.env.WAYLAND_DISPLAY;
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+      delete process.env.DISPLAY;
+      delete process.env.WAYLAND_DISPLAY;
+
+      try {
+        const program = buildProgram();
+        program.parse(['node', 'fpdf', 'fill', 'form.pdf']);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(openModule.default).not.toHaveBeenCalled();
+        expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Headless environment'));
+      } finally {
+        Object.defineProperty(process, 'platform', { value: savedPlatform, configurable: true });
+        if (savedDisplay === undefined) delete process.env.DISPLAY;
+        else process.env.DISPLAY = savedDisplay;
+        if (savedWayland === undefined) delete process.env.WAYLAND_DISPLAY;
+        else process.env.WAYLAND_DISPLAY = savedWayland;
+      }
     });
 
     it('does not warn when the doc has fillable fields', async () => {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/the-hcma/fpdf/compare/v1.1.0...v1.2.0) (2026-04-29)
+
+
+### Features
+
+* add OS instructions for npx and update agent script path ([#338](https://github.com/the-hcma/fpdf/issues/338)) ([1426f33](https://github.com/the-hcma/fpdf/commit/1426f33bdd2a6de55f93bb9460e5a2b4f037f5e3))
+
 ## [1.1.0](https://github.com/the-hcma/fpdf/compare/v1.0.6...v1.1.0) (2026-04-29)
 
 

@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import * as readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { hostname } from 'node:os';
 import { PDFDocument } from 'pdf-lib';
 import { exportPdf } from './exporter.js';
 import * as path from 'node:path';
@@ -71,6 +72,33 @@ async function migrateDoc(pdfPath: string, oldDoc: FpdfDocument): Promise<FpdfDo
   }
 
   return freshDoc;
+}
+
+/**
+ * Returns true when the process has access to a graphical display.
+ * On Linux this checks DISPLAY (X11) and WAYLAND_DISPLAY (Wayland).
+ * On macOS and Windows a display is always assumed to be present.
+ */
+function hasDisplay(): boolean {
+  if (process.platform === 'linux') {
+    return Boolean(process.env.DISPLAY ?? process.env.WAYLAND_DISPLAY);
+  }
+  return true;
+}
+
+/**
+ * Open `url` in the default browser if a graphical display is available,
+ * logging the host name and URL.  When running headless (e.g. on a remote
+ * server or in CI), logs a hint so the user can open the URL manually.
+ */
+async function openBrowser(url: string): Promise<void> {
+  const host = hostname();
+  if (hasDisplay()) {
+    logger.info(`Opening browser on ${host} → ${url}`);
+    await open(url);
+  } else {
+    logger.info(`Headless environment on ${host} — no display detected; open manually: ${url}`);
+  }
 }
 
 /**
@@ -200,7 +228,10 @@ export function buildProgram(): Command {
   program
     .command('fill <file>')
     .description('Analyze a PDF and start a local fill session in the browser')
-    .option('--open', 'Automatically open the URL in the default browser', false)
+    .option(
+      '--no-open',
+      'Do not automatically open the browser (default: auto-open when a display is available)',
+    )
     .option('--json <path>', 'Resume from an existing .fpdf.json session file')
     .option('--fresh', 'Ignore any existing .fpdf.json and re-analyze the PDF from scratch', false)
     .option(
@@ -269,7 +300,11 @@ export function buildProgram(): Command {
           const totalPages = doc.pages.length;
           const pageWord = totalPages === 1 ? 'page' : 'pages';
           const fieldWord = totalFields === 1 ? 'field' : 'fields';
-          const host = opts.listenAll ? '0.0.0.0' : undefined;
+          const autoListenAll = !hasDisplay();
+          if (autoListenAll && !opts.listenAll) {
+            logger.info('Headless environment detected — binding to 0.0.0.0 (network-accessible)');
+          }
+          const host = opts.listenAll || autoListenAll ? '0.0.0.0' : undefined;
           const port = opts.port !== undefined ? parseInt(opts.port, 10) : undefined;
           const handle = await startServerRestarting({
             pdfPath,
@@ -290,7 +325,7 @@ export function buildProgram(): Command {
             const browserUrl = handle.ownerToken
               ? `${handle.url}/?session=${handle.ownerToken}`
               : handle.url;
-            await open(browserUrl);
+            await openBrowser(browserUrl);
           }
 
           // Keep the process alive until SIGINT / SIGTERM
@@ -543,7 +578,7 @@ export function buildProgram(): Command {
 
     // Validate picker-mode flags manually (allowUnknownOption suppresses
     // Commander's built-in check, so we do it ourselves).
-    const pickerKnownFlags = new Set(['--open', '--listen-all', '--port']);
+    const pickerKnownFlags = new Set(['--open', '--no-open', '--listen-all', '--port']);
     for (let i = 2; i < argv.length; i++) {
       const arg = argv[i];
       if (!arg?.startsWith('-')) continue;
@@ -554,12 +589,16 @@ export function buildProgram(): Command {
       if (arg === '--port') i++; // skip the value argument
     }
 
-    const shouldOpen = argv.includes('--open');
+    const shouldOpen = !argv.includes('--no-open');
     const shouldListenAll = argv.includes('--listen-all');
     const portIdx = argv.indexOf('--port');
     const portArg = portIdx !== -1 ? argv[portIdx + 1] : undefined;
     const run = async (): Promise<void> => {
-      const host = shouldListenAll ? '0.0.0.0' : undefined;
+      const autoListenAll = !hasDisplay();
+      if (autoListenAll && !shouldListenAll) {
+        logger.info('Headless environment detected — binding to 0.0.0.0 (network-accessible)');
+      }
+      const host = shouldListenAll || autoListenAll ? '0.0.0.0' : undefined;
       const port = portArg !== undefined ? parseInt(portArg, 10) : undefined;
       const handle = await startServerRestarting({
         // Picker mode (no subcommand) is a persistent service — never auto-exit
@@ -573,7 +612,7 @@ export function buildProgram(): Command {
         process.stdout.write(`${u}\n`);
       }
       if (shouldOpen) {
-        await open(handle.url);
+        await openBrowser(handle.url);
       }
       const shutdown = (): void => {
         void handle

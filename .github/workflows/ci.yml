@@ -42,6 +42,32 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  changed-files:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      deps_changed: ${{ steps.diff.outputs.deps_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          if [[ -z "$base" || -z "$head" ]]; then
+            echo "deps_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "${base}..${head}" | rg -q '^(package\\.json|pnpm-lock\\.yaml)$'; then
+            echo "deps_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deps_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   shellcheck:
     needs: guard
     if: needs.guard.outputs.skip != 'true'
@@ -52,8 +78,8 @@ jobs:
         run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
   ci:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
+    needs: [guard, changed-files]
+    if: needs.guard.outputs.skip != 'true' && (github.event_name != 'pull_request' || needs.changed-files.outputs.deps_changed == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

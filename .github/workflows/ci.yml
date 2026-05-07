@@ -49,20 +49,22 @@ jobs:
     outputs:
       deps_changed: ${{ steps.diff.outputs.deps_changed }}
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
       - id: diff
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          base="${{ github.event.pull_request.base.sha }}"
-          head="${{ github.event.pull_request.head.sha }}"
-          if [[ -z "$base" || -z "$head" ]]; then
+          pr_number="${{ github.event.pull_request.number }}"
+          if [[ -z "$pr_number" ]]; then
             echo "deps_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if git diff --name-only "${base}..${head}" | rg -q '^(package\\.json|pnpm-lock\\.yaml)$'; then
+          if gh pr view "$pr_number" \
+            --repo "${{ github.repository }}" \
+            --json files \
+            -q '.files[].path' \
+            | rg -q '^(package\\.json|pnpm-lock\\.yaml)$'; then
             echo "deps_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "deps_changed=false" >> "$GITHUB_OUTPUT"

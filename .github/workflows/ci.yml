@@ -42,6 +42,34 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+  changed-files:
+    needs: guard
+    if: needs.guard.outputs.skip != 'true' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      npm_deps_changed: ${{ steps.diff.outputs.npm_deps_changed }}
+    steps:
+      - id: diff
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_number="${{ github.event.pull_request.number }}"
+          if [[ -z "$pr_number" ]]; then
+            echo "npm_deps_changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if gh pr view "$pr_number" \
+            --repo "${{ github.repository }}" \
+            --json files \
+            -q '.files[].path' \
+            | rg -q '^(package\\.json|pnpm-lock\\.yaml)$'; then
+            echo "npm_deps_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "npm_deps_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   shellcheck:
     needs: guard
     if: needs.guard.outputs.skip != 'true'
@@ -52,8 +80,8 @@ jobs:
         run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
   ci:
-    needs: guard
-    if: needs.guard.outputs.skip != 'true'
+    needs: [guard, changed-files]
+    if: needs.guard.outputs.skip != 'true' && (github.event_name != 'pull_request' || needs.changed-files.outputs.npm_deps_changed == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

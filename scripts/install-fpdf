@@ -235,6 +235,28 @@ _fpdf_check_env() {
   if command -v fnm &>/dev/null; then
     eval "\$(fnm env --shell bash 2>/dev/null)" || true
   fi
+  # NVM default Node (mirrors scripts/fpdf _fpdf_prepend_nvm_default_node)
+  local nvm_root ver latest_ver bin_prefix
+  nvm_root="\${HOME}/.nvm/versions/node"
+  if [[ -d "\$nvm_root" ]]; then
+    ver=""
+    if [[ -f "\${HOME}/.nvm/alias/default" ]]; then
+      ver="\$(tr -d '[:space:]' <"\${HOME}/.nvm/alias/default" 2>/dev/null || true)"
+    fi
+    if [[ "\$ver" == 'system' ]]; then ver=""; fi
+    bin_prefix=""
+    if [[ -n "\$ver" && -d "\${nvm_root}/\${ver}/bin" ]]; then
+      bin_prefix="\${nvm_root}/\${ver}/bin"
+    else
+      latest_ver="\$(for d in "\$nvm_root"/v*; do [[ -d "\$d" ]] || continue; printf '%s\n' "\${d##*/}"; done | sort -V 2>/dev/null | tail -1 || true)"
+      if [[ -n "\$latest_ver" && -d "\${nvm_root}/\${latest_ver}/bin" ]]; then
+        bin_prefix="\${nvm_root}/\${latest_ver}/bin"
+      fi
+    fi
+    if [[ -n "\$bin_prefix" && ":\$PATH:" != *":\${bin_prefix}:"* ]]; then
+      export PATH="\${bin_prefix}:\$PATH"
+    fi
+  fi
   # Prefer brew-installed node on macOS (mirrors scripts/fpdf _reload_brew_node)
   if command -v brew &>/dev/null; then
     local brew_node_bin

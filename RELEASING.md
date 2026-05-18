@@ -2,7 +2,15 @@
 
 `fpdf` uses Google's [Release Please](https://github.com/googleapis/release-please-action) to automate versioning, changelog generation, and NPM publishing.
 
-The release process relies entirely on **Conventional Commits** (`feat:`, `fix:`, `docs:`, etc.). 
+The release process relies entirely on **Conventional Commits** (`feat:`, `fix:`, `docs:`, etc.).
+
+## Merge strategy (avoid duplicate changelog lines)
+
+Release Please walks **every** commit on `main` since the last tag. If a PR is merged with **Create a merge commit**, GitHub records both the branch commit (e.g. `fix(scope): …`) and a merge commit whose body repeats that same line. Release Please treats them as two separate changes, so the release PR lists the same fix twice in **`CHANGELOG.md` and the PR description** ([upstream discussion](https://github.com/googleapis/release-please/issues/2476)).
+
+This repository allows **squash merge only** (merge commits and rebase merges are disabled in GitHub settings). Squash uses the PR title as the commit subject and an empty squash body (`squash_merge_commit_message: BLANK`), which matches the assert step in `.github/workflows/release-please.yml`.
+
+That policy prevents duplicate changelog entries such as those in [PR #378](https://github.com/the-hcma/fpdf/pull/378) after [PR #377](https://github.com/the-hcma/fpdf/pull/377) was merge-committed before squash-only was enforced.
 
 ## How to trigger a new release
 

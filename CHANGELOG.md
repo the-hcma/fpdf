@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.1](https://github.com/the-hcma/fpdf/compare/v1.2.0...v1.2.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **scripts:** prefer NVM and local Node before system nodejs ([56f0c0e](https://github.com/the-hcma/fpdf/commit/56f0c0ecf3416e80c583f853bf0eae13593f73c2))
+* **scripts:** prefer NVM and local Node before system nodejs ([bbdba85](https://github.com/the-hcma/fpdf/commit/bbdba855cad90fff2cc8c4e238f2bd7143a322ae))
+
 ## [1.2.0](https://github.com/the-hcma/fpdf/compare/v1.1.0...v1.2.0) (2026-04-29)
 
 

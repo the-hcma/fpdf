@@ -15,6 +15,88 @@ else
   readonly r=''
 fi
 
+# _fpdf_prepend_dir <directory>
+# Prepends directory to PATH when it exists and is not already present.
+_fpdf_prepend_dir() {
+  local -r dir="$1"
+
+  [[ -n "$dir" && -d "$dir" ]] || return 0
+  case ":${PATH}:" in
+    *":${dir}:"*) return 0 ;;
+  esac
+  PATH="${dir}:${PATH:-}"
+  export PATH
+}
+
+_fpdf_prepend_local_bin() {
+  if [[ -n "${HOME:-}" && -d "${HOME}/.local/bin" ]]; then
+    _fpdf_prepend_dir "${HOME}/.local/bin"
+  fi
+}
+
+_fpdf_prepend_pnpm_standalone() {
+  if command -v pnpm >/dev/null 2>&1; then
+    return 0
+  fi
+  if [[ -n "${HOME:-}" && -x "${HOME}/.local/share/pnpm/pnpm" ]]; then
+    _fpdf_prepend_dir "${HOME}/.local/share/pnpm"
+  fi
+}
+
+# Prefer user-local Node (NVM, fnm, ~/.local/bin) before system nodejs.
+# Systemd and non-login shells often omit NVM; login shells already have it.
+_fpdf_bootstrap_path() {
+  _reload_fnm
+  _fpdf_prepend_nvm_default_node
+  _fpdf_prepend_local_bin
+  _fpdf_prepend_pnpm_standalone
+}
+
+# NVM default Node (login shells and cron/systemd often omit ~/.nvm/.../bin).
+_fpdf_prepend_nvm_default_node() {
+  local nvm_root ver lts_file lts_name latest_ver bin_prefix
+
+  [[ -n "${HOME:-}" ]] || return 0
+
+  nvm_root="${HOME}/.nvm/versions/node"
+  [[ -d "$nvm_root" ]] || return 0
+
+  ver=""
+  if [[ -f "${HOME}/.nvm/alias/default" ]]; then
+    ver="$(tr -d '[:space:]' <"${HOME}/.nvm/alias/default" 2>/dev/null || true)"
+  fi
+
+  if [[ "$ver" == lts/* ]]; then
+    lts_name="${ver#lts/}"
+    lts_file="${HOME}/.nvm/alias/lts/${lts_name}"
+    if [[ -f "$lts_file" ]]; then
+      ver="$(tr -d '[:space:]' <"$lts_file" 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ "$ver" == 'system' ]]; then
+    ver=""
+  fi
+
+  bin_prefix=""
+  if [[ -n "$ver" && -d "${nvm_root}/${ver}/bin" ]]; then
+    bin_prefix="${nvm_root}/${ver}/bin"
+  else
+    latest_ver=""
+    latest_ver="$(for d in "$nvm_root"/v*; do
+      [[ -d "$d" ]] || continue
+      printf '%s\n' "${d##*/}"
+    done | sort -V 2>/dev/null | tail -1 || true)"
+    if [[ -n "$latest_ver" && -d "${nvm_root}/${latest_ver}/bin" ]]; then
+      bin_prefix="${nvm_root}/${latest_ver}/bin"
+    fi
+  fi
+
+  if [[ -n "$bin_prefix" ]]; then
+    _fpdf_prepend_dir "$bin_prefix"
+  fi
+}
+
 # Load fnm into the current shell (makes fnm-managed node visible in PATH).
 # Guard against growing PATH on repeated calls.
 _reload_fnm() {
@@ -122,7 +204,7 @@ set -- "${_remaining_args[@]+"${_remaining_args[@]}"}"
 case "${1:-}" in
   clean)
     # Always handled in bash — clean must work regardless of node/node_modules state.
-    _reload_fnm
+    _fpdf_bootstrap_path
     _fpdf_clean
     exit 0
     ;;
@@ -212,15 +294,15 @@ _min_major=$(grep '"node"' "$root_dir/package.json" | grep -oE '[0-9]+' | head -
 _min_major="${_min_major:-20}"
 readonly _min_major
 
-# Load fnm, then prefer brew-installed node on macOS if it meets the requirement.
-_reload_fnm
+# Load fnm/NVM/local bin, then prefer brew-installed node on macOS if it meets the requirement.
+_fpdf_bootstrap_path
 _reload_brew_node
 
 # Check that node is available.
 while ! command -v node &>/dev/null; do
   echo "[fpdf] 'node' is not installed (required: >= ${_min_major})." >&2
   _offer_node_menu 0
-  _reload_fnm
+  _fpdf_bootstrap_path
   _reload_brew_node
 done
 
@@ -266,7 +348,7 @@ while [[ "$_fpdf_node_skip" == '0' && "$_node_major" -lt "$_min_major" ]]; do
     break
   fi
   _offer_node_menu 1
-  _reload_fnm
+  _fpdf_bootstrap_path
   _reload_brew_node
   _node_major=$(node --version | tr -d 'v' | cut -d. -f1)
 done

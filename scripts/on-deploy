@@ -18,6 +18,38 @@
 
 set -euo pipefail
 
+# True when pnpm-lock.yaml / package.json is newer than node_modules (or missing).
+_deploy_pnpm_modules_stale() {
+    local repo="$1"
+    local lock="$repo/pnpm-lock.yaml"
+    local project="$repo/package.json"
+    local modules="$repo/node_modules"
+    if [[ ! -f "$project" ]]; then
+        return 1
+    fi
+    if [[ ! -d "$modules" ]]; then
+        return 0
+    fi
+    if [[ ! -f "$lock" ]]; then
+        return 1
+    fi
+    local newest_input="$lock"
+    local input_mtime modules_mtime lock_mtime
+    if [[ -f "$project" ]]; then
+        input_mtime="$(stat -c '%Y' "$project")"
+        lock_mtime="$(stat -c '%Y' "$lock")"
+        if (( input_mtime > lock_mtime )); then
+            newest_input="$project"
+        fi
+    fi
+    modules_mtime="$(stat -c '%Y' "$modules")"
+    input_mtime="$(stat -c '%Y' "$newest_input")"
+    if (( input_mtime > modules_mtime )); then
+        return 0
+    fi
+    return 1
+}
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 repo_dir="$(cd "$script_dir/.." && pwd)"
@@ -31,6 +63,13 @@ readonly service_name
 
 build_rev_file="${repo_dir}/dist/.build-rev"
 code_changed=false
+deps_changed=false
+
+if _deploy_pnpm_modules_stale "$repo_dir"; then
+    echo "📦 pnpm lockfiles newer than node_modules — running pnpm install..."
+    pnpm --prefix "${repo_dir}" install --frozen-lockfile
+    deps_changed=true
+fi
 
 if [[ ! -d "${repo_dir}/dist" || ! -f "$build_rev_file" ]]; then
     echo "🔨 dist/.build-rev not found — running pnpm build..."
@@ -41,6 +80,10 @@ else
     head_rev="$(git -C "${repo_dir}" rev-parse HEAD)"
     if [[ "$built_rev" != "$head_rev" ]]; then
         echo "🔄 dist built at ${built_rev:0:8}, HEAD is ${head_rev:0:8} — rebuilding..."
+        pnpm --prefix "${repo_dir}" build
+        code_changed=true
+    elif [[ "$deps_changed" == "true" ]]; then
+        echo "🔄 dependencies updated — rebuilding..."
         pnpm --prefix "${repo_dir}" build
         code_changed=true
     fi

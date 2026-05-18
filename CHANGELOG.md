@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/the-hcma/fpdf/compare/v1.2.1...v1.2.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **ci:** allow esbuild postinstall for pnpm 10+ ([#380](https://github.com/the-hcma/fpdf/issues/380)) ([82a04a4](https://github.com/the-hcma/fpdf/commit/82a04a41576608283eb828883448a3f90c9a84f7))
+
 ## [1.2.1](https://github.com/the-hcma/fpdf/compare/v1.2.0...v1.2.1) (2026-05-18)
 
 

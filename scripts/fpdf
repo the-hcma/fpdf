@@ -201,6 +201,26 @@ for _arg in "$@"; do
 done
 set -- "${_remaining_args[@]+"${_remaining_args[@]}"}"
 
+# True for systemd --yes, cron, or any context without a controlling terminal on stderr.
+_fpdf_non_interactive() {
+  [[ "$_fpdf_yes" == '1' ]] || [[ ! -t 2 ]]
+}
+
+# pnpm 10+ aborts node_modules purge without a TTY unless CI=true (or confirmModulesPurge).
+# Service mode uses frozen-lockfile when a lockfile is present.
+_fpdf_pnpm_install() {
+  if _fpdf_non_interactive; then
+    export CI=true
+    if [[ -f "$root_dir/pnpm-lock.yaml" ]]; then
+      pnpm --dir "$root_dir" install --frozen-lockfile
+    else
+      pnpm --dir "$root_dir" install
+    fi
+  else
+    pnpm --dir "$root_dir" install
+  fi
+}
+
 case "${1:-}" in
   clean)
     # Always handled in bash — clean must work regardless of node/node_modules state.
@@ -331,11 +351,14 @@ while [ ! -d "$root_dir/node_modules" ]; do
   fi
   [[ "$reply" =~ ^[Nn] ]] && exit 0
   echo "[fpdf] Installing dependencies…" >&2
-  if pnpm --dir "$root_dir" install >&2; then
+  if _fpdf_pnpm_install >&2; then
     touch "$root_dir/node_modules"
     echo "[fpdf] Dependencies installed." >&2
   else
     echo "[fpdf] Installation failed — check the output above." >&2
+    if _fpdf_non_interactive; then
+      exit 1
+    fi
   fi
 done
 
@@ -365,11 +388,14 @@ while [ "$root_dir/package.json" -nt "$root_dir/node_modules" ] || \
   fi
   [[ "$reply" =~ ^[Nn] ]] && break
   echo "[fpdf] Updating dependencies…" >&2
-  if pnpm --dir "$root_dir" install >&2; then
+  if _fpdf_pnpm_install >&2; then
     touch "$root_dir/node_modules"
     echo "[fpdf] Dependencies updated." >&2
   else
     echo "[fpdf] Update failed — check the output above." >&2
+    if _fpdf_non_interactive; then
+      exit 1
+    fi
   fi
 done
 

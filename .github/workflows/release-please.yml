@@ -159,7 +159,9 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.version != '')
       )
     runs-on: ubuntu-latest
-    # NPM_TOKEN is a repository secret; no environment gate (auto-publish after release).
+    # Must match the environment name on npm trusted publisher settings (if configured).
+    # Required reviewers were removed from this environment so publish is not gated.
+    environment: npm-production
     permissions:
       contents: read
       id-token: write # required for NPM provenance
@@ -201,10 +203,10 @@ jobs:
         id: get-version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
         
+      # Trusted publishing (OIDC): do not set NODE_AUTH_TOKEN unless NPM_TOKEN exists;
+      # an empty token prevents OIDC and breaks publish.
       - name: Publish to npm
         run: pnpm publish --ignore-scripts --no-git-checks --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   smoke-test:
     name: Post-publish smoke test (npx)

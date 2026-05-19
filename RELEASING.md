@@ -24,8 +24,15 @@ That policy prevents duplicate changelog entries such as those in [PR #378](http
 
 Once the Release PR is merged:
 1. `release-please` automatically generates a **GitHub Release** and tags the repository (e.g., `v0.2.0`).
-2. The creation of this GitHub Release triggers the **NPM Publish** GitHub Action (`.github/workflows/npm-publish.yml`).
-3. The NPM Publish action builds the project, tests it, and publishes it securely to the `npmjs.com` registry using `--provenance`.
+2. The **Release & Publish** workflow (`.github/workflows/release-please.yml`) runs `publish-npm` on `main`.
+3. npm publish uses **trusted publishing** (OIDC) from the `npm-production` GitHub Environment — no long-lived `NPM_TOKEN` required.
+
+If publish fails with OIDC / 404 errors, confirm on [npm package settings](https://www.npmjs.com/package/@the-hcma/fpdf) that the trusted publisher matches:
+- Repository: `the-hcma/fpdf`
+- Workflow file: `release-please.yml`
+- Environment (if set): `npm-production`
+
+Do not remove `environment: npm-production` from the workflow unless you also remove or update the environment on npm.
 
 ## Manual Fallback
 

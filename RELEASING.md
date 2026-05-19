@@ -16,6 +16,8 @@ That policy prevents duplicate changelog entries such as those in [PR #378](http
 
 1. **Develop and merge as usual**: Every time you merge PRs into `main` using Conventional Commits, the automated `release-please` GitHub action evaluates the commits since the last release.
 2. **Review the Release PR**: `release-please` will automatically open (or update) a Pull Request titled `chore(main): release X.Y.Z`. This PR contains the version bumps in `package.json` and auto-generated updates to `CHANGELOG.md`.
+   - After each bot update, **Release & Publish** runs a `ci` check on the release PR head commit (required for merge). If that check is missing, close and reopen the release PR, or re-run the failed workflow from the Actions tab.
+   - **Optional (recommended):** add a `RELEASE_PLEASE_TOKEN` repository secret (fine-grained PAT with `contents` + `pull_requests` write on this repo) and pass it to `googleapis/release-please-action` so release PR updates also trigger the normal **CI** workflow via `pull_request` events. See [release-please-action](https://github.com/googleapis/release-please-action#other-actions-on-release-please-prs).
 3. **Merge the Release PR**: When you are ready to publish the new version, simply approve and **merge** the Release PR into `main`.
 
 ## What happens after merging?

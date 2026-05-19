@@ -27,6 +27,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -57,6 +58,20 @@ jobs:
             echo "This usually means the commit message could not be parsed. Check that squash_merge_commit_message=BLANK is set on the repository." >&2
             exit 1
           fi
+
+      # release-please pushes with GITHUB_TOKEN do not trigger pull_request workflows.
+      # Dispatch CI so the release PR gets the required `ci` check.
+      - name: Trigger CI on release PR
+        if: steps.release.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_ref=$(gh pr view "${{ steps.release.outputs.pr }}" \
+            --repo "${{ github.repository }}" \
+            --json headRefName \
+            -q .headRefName)
+          gh workflow run CI --ref "$head_ref"
 
   publish-npm:
     # On push: run only when release-please created a release tag.

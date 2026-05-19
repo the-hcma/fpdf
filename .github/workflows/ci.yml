@@ -64,7 +64,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --json files \
             -q '.files[].path' \
-            | rg -q '^(package\\.json|pnpm-lock\\.yaml)$'; then
+            | grep -qE '^(package\.json|pnpm-lock\.yaml)$'; then
             echo "npm_deps_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "npm_deps_changed=false" >> "$GITHUB_OUTPUT"
@@ -81,7 +81,15 @@ jobs:
 
   ci:
     needs: [guard, changed-files]
-    if: needs.guard.outputs.skip != 'true' && (github.event_name != 'pull_request' || needs.changed-files.outputs.npm_deps_changed == 'true')
+    if: >-
+      needs.guard.outputs.skip != 'true' &&
+      (
+        github.event_name != 'pull_request' ||
+        (
+          needs.changed-files.result == 'success' &&
+          needs.changed-files.outputs.npm_deps_changed == 'true'
+        )
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

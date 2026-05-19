@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.2](https://github.com/the-hcma/fpdf/compare/v1.2.1...v1.2.2) (2026-05-19)
+
+
+### Bug Fixes
+
+* **ci:** allow esbuild postinstall for pnpm 10+ ([#380](https://github.com/the-hcma/fpdf/issues/380)) ([82a04a4](https://github.com/the-hcma/fpdf/commit/82a04a41576608283eb828883448a3f90c9a84f7))
+* **ci:** run ci check on release-please PR updates ([#389](https://github.com/the-hcma/fpdf/issues/389)) ([e68a8ca](https://github.com/the-hcma/fpdf/commit/e68a8caa3c10796d6698a9546274d14c5d9a58d6))
+* **ci:** use grep for dep-file detection on GitHub runners ([#388](https://github.com/the-hcma/fpdf/issues/388)) ([277d315](https://github.com/the-hcma/fpdf/commit/277d3151ad1f5191547ddce253d8ca5d8fa1433b))
+* **deps:** sync pnpm-lock.yaml with manifest ([#386](https://github.com/the-hcma/fpdf/issues/386)) ([2498c58](https://github.com/the-hcma/fpdf/commit/2498c58ab837ec02cb6c702ca74fdef21d2c52a3))
+* **fpdf:** set CI=true for pnpm install under --yes ([#387](https://github.com/the-hcma/fpdf/issues/387)) ([9d73c98](https://github.com/the-hcma/fpdf/commit/9d73c983c5f2049f742555996ed9b43c734f1df4))
+
 ## [1.2.1](https://github.com/the-hcma/fpdf/compare/v1.2.0...v1.2.1) (2026-05-18)
 
 

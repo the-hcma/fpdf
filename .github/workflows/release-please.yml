@@ -27,6 +27,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -58,6 +59,20 @@ jobs:
             exit 1
           fi
 
+      # release-please pushes with GITHUB_TOKEN do not trigger pull_request workflows.
+      # Dispatch CI so the release PR gets the required `ci` check.
+      - name: Trigger CI on release PR
+        if: steps.release.outputs.pr != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          head_ref=$(gh pr view "${{ steps.release.outputs.pr }}" \
+            --repo "${{ github.repository }}" \
+            --json headRefName \
+            -q .headRefName)
+          gh workflow run CI --ref "$head_ref"
+
   publish-npm:
     # On push: run only when release-please created a release tag.
     # On workflow_dispatch: run directly (release-please job is skipped).
@@ -68,7 +83,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.version != '')
       )
     runs-on: ubuntu-latest
-    environment: npm-production
+    # NPM_TOKEN is a repository secret; no environment gate (auto-publish after release).
     permissions:
       contents: read
       id-token: write # required for NPM provenance

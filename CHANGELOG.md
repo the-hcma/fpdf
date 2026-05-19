@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/the-hcma/fpdf/compare/v1.2.2...v1.2.3) (2026-05-19)
+
+
+### Bug Fixes
+
+* **release:** restore npm-production env for trusted publishing ([#390](https://github.com/the-hcma/fpdf/issues/390)) ([707ec1b](https://github.com/the-hcma/fpdf/commit/707ec1b02818c7d330e661b00ad343d61bd7de55))
+
 ## [1.2.2](https://github.com/the-hcma/fpdf/compare/v1.2.1...v1.2.2) (2026-05-19)
 
 

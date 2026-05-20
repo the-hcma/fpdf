@@ -150,6 +150,24 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ---
 
+## Dependency release age (10 days)
+
+New dependency versions must be at least **10 days** old before this repo adopts them (aligned with [repository-helpers](https://github.com/the-hcma/repository-helpers) `AGENTS.md`).
+
+| Layer | Mechanism |
+|-------|-----------|
+| **pnpm** | `minimumReleaseAge: 14400` in `pnpm-workspace.yaml`; lockfile pins grandfathered via `minimumReleaseAgeExclude` and `pnpm-release-age-grandfather.tsv` (maintained with repository-helpers `scripts/grandfather-pnpm-release-age` and `scripts/prune-pnpm-release-age-grandfather`). |
+| **Dependabot** | `cooldown: default-days: 10` on version-update PRs in `.github/dependabot.yml`. |
+| **dep-updater** | `scripts/dep-updater` enforces the same 10-day npm gate when proposing bumps. |
+
+### CVE and security exceptions
+
+- **Dependabot security updates** are not subject to the version-update cooldown.
+- **dep-updater:** when `npm audit` reports **CVE IDs and an available fix** for a package, dep-updater **skips** the 10-day npm release-age gate for that package only; ordinary version bumps still wait 10 days.
+- **pnpm install** still enforces `minimumReleaseAge` unless a version is grandfathered—use audit/security PRs for CVE response, not ad-hoc bumps to day-zero releases.
+
+---
+
 ## CI Checks (all must pass)
 
 ```

@@ -152,19 +152,20 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ## Dependency release age (10 days)
 
-New dependency versions must be at least **10 days** old before this repo adopts them (aligned with [repository-helpers](https://github.com/the-hcma/repository-helpers) `AGENTS.md`).
+New dependency versions must be at least **10 days** old before this repo adopts them (see [repository-helpers](https://github.com/the-hcma/repository-helpers) `AGENTS.md`).
 
 | Layer | Mechanism |
 |-------|-----------|
-| **pnpm** | `minimumReleaseAge: 14400` in `pnpm-workspace.yaml`; lockfile pins grandfathered via `minimumReleaseAgeExclude` and `pnpm-release-age-grandfather.tsv` (maintained with repository-helpers `scripts/grandfather-pnpm-release-age` and `scripts/prune-pnpm-release-age-grandfather`). |
-| **Dependabot** | `cooldown: default-days: 10` on version-update PRs in `.github/dependabot.yml`. |
-| **dep-updater** | `scripts/dep-updater` enforces the same 10-day npm gate when proposing bumps. |
+| **pnpm** | `minimumReleaseAge: 14400` in `pnpm-workspace.yaml`. `minimumReleaseAgeExclude: ["*"]` grandfathers the **existing lockfile at cutover** so CI keeps working. |
+| **Dependabot** | `cooldown: default-days: 10` on **version-update** PRs in `.github/dependabot.yml`. |
+| **dep-updater** | Same 10-day npm gate when proposing bumps from repository-helpers. |
 
 ### CVE and security exceptions
 
 - **Dependabot security updates** are not subject to the version-update cooldown.
-- **dep-updater:** when `npm audit` reports **CVE IDs and an available fix** for a package, dep-updater **skips** the 10-day npm release-age gate for that package only; ordinary version bumps still wait 10 days.
-- **pnpm install** still enforces `minimumReleaseAge` unless a version is grandfathered—use audit/security PRs for CVE response, not ad-hoc bumps to day-zero releases.
+- **dep-updater:** when `npm audit` reports CVE IDs with an available fix, dep-updater skips the 10-day npm gate for that package only.
+
+**Day-to-day:** no grandfather scripts to run. Review Dependabot and dep-updater PRs as usual. Re-run `scripts/grandfather-pnpm-release-age --wildcard` only if `pnpm-workspace.yaml` was lost after a major lockfile reset.
 
 ---
 

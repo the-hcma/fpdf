@@ -75,7 +75,7 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
       - name: Lint shell scripts
         run: find scripts/ -type f ! -name "*.*" | xargs shellcheck
 
@@ -92,13 +92,13 @@ jobs:
       )
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v6.0.2
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.0.8
         with:
           version: latest
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: '24'
           cache: 'pnpm'
@@ -118,7 +118,7 @@ jobs:
     if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v6.0.2
       with:
         fetch-depth: 0
         ref: ${{ github.event.pull_request.head.sha || github.sha }}

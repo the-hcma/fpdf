@@ -82,9 +82,12 @@ describe('CLI program structure', () => {
     const program = buildProgram();
     const fill = program.commands.find((c) => c.name() === 'fill');
     expect(fill).toBeDefined();
-    // Commander negatable option: --no-open sets open to false; default is true
+    // Commander negatable option: --no-open sets open to false; default is true after parse
     const opt = fill?.options.find((o) => o.long === '--no-open');
     expect(opt).toBeDefined();
+    expect(opt?.negate).toBe(true);
+    fill?.action(() => undefined);
+    fill?.parse(['form.pdf'], { from: 'user' });
     expect(fill?.getOptionValue('open')).toBe(true);
   });
 

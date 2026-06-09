@@ -11,6 +11,23 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - By default it prompts for a new stack name and creates a new worktree under `.worktrees/<stack-name>-wt` ready for work.
 - Pass `--resume` to instead pick up an existing in-progress worktree: it lists pending worktrees and lets you select one (or creates a new one if none exist).
 - Pass `--refresh` to pull latest main and ensure the systemd service is installed and running, then exit.
+- After `start-development` finishes, **`cd` into the stack worktree** (`.worktrees/<stack-name>-wt`) before any other work. Do not stay in the primary clone.
+
+### Main worktree is off-limits (agents)
+
+The **primary clone** (repo root — first entry in `git worktree list`, usually on branch `main`) is the **main worktree**. Treat it as **read-only** unless the user explicitly authorizes touching it in the current conversation.
+
+**Never on the main worktree** (without explicit user authorization):
+
+- Edit, create, or delete source files, config, or lockfiles
+- Run `pnpm install`, `pnpm test`, `pnpm run check`, builds, or formatters
+- Run `dep-updater` with `--dir` pointing at the primary clone (it may fast-forward `main` and mutate git state)
+- Run `gt create`, `gt modify`, `gt submit`, `gt sync`, `gt restack`, or other Graphite/git write operations
+- Leave uncommitted changes, stray branches, or detached HEAD state
+
+**Always** do implementation, investigation that mutates state, and validation in a **stack worktree** under `.worktrees/<stack-name>-wt`. Pass that path to tools (`--dir`, `cd`, etc.).
+
+`start-development` may update the main worktree for environment sync only; that is not permission to work there. If you need to inspect `main` without changing it, use read-only commands (`git log`, `git show`, `gh pr view`) or a **detached temporary worktree** — not the primary clone.
 
 ---
 
@@ -95,7 +112,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
 - Never work directly on `main`. Always create a stack branch: `gt create -m "feat: description"`.
 - Keep each branch in the stack focused on exactly one logical change. Stacks should map 1-to-1 with milestones or sub-tasks from [PLAN.md](./PLAN.md).
-- Sync regularly: `gt sync` before starting new work; `gt restack` after upstream changes land.
+- Sync regularly via `start-development` (or `gt sync` from a **stack worktree**, never as ad-hoc writes on the main worktree); `gt restack` after upstream changes land.
 - Submit stacks with `gt submit --no-interactive` — do not open PRs manually via the GitHub UI.
 - After submitting, always mark PRs as ready for review: `gh pr ready <number>`. `gt submit --no-interactive` creates drafts by default.
 - To merge a PR, add the `merge-it` label: `gh pr edit <number> --add-label merge-it`. Never use `gh pr merge` directly.

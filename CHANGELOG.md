@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.4](https://github.com/the-hcma/fpdf/compare/v1.2.3...v1.2.4) (2026-06-11)
+
+
+### Bug Fixes
+
+* **ci:** sync canonical secret-scan script ([#407](https://github.com/the-hcma/fpdf/issues/407)) ([61d04de](https://github.com/the-hcma/fpdf/commit/61d04de98f343fc8878807a778b75e71830cb852))
+* **ci:** sync canonical secret-scan script ([#410](https://github.com/the-hcma/fpdf/issues/410)) ([71736d9](https://github.com/the-hcma/fpdf/commit/71736d9af7cc4ae66ae9c943dc0d93fae207b6a7))
+* **ci:** use canonical secret-scan job ([#408](https://github.com/the-hcma/fpdf/issues/408)) ([833ee9d](https://github.com/the-hcma/fpdf/commit/833ee9dec64450ba8ca549309617b3f41448cc02))
+
 ## [1.2.3](https://github.com/the-hcma/fpdf/compare/v1.2.2...v1.2.3) (2026-05-19)
 
 

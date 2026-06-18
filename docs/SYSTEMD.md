@@ -4,8 +4,13 @@ This guide covers how to install, manage, and troubleshoot fpdf as a
 persistent background service using systemd's user session support.
 
 The service runs under your user account (no root required), starts on boot
-via lingering, and is managed using the `setup-service` script from
+via lingering on the designated **ConditionHost**, and is managed using
+`setup-service` from
 [repository-helpers](https://github.com/the-hcma/repository-helpers).
+
+Unit templates live in **repository-helpers**
+`share/systemd-unit-templates/` (not in this repo). Optional local overrides
+may be placed in gitignored `etc/systemd/`.
 
 ## Prerequisites
 
@@ -13,6 +18,8 @@ via lingering, and is managed using the `setup-service` script from
 - [`repository-helpers`](https://github.com/the-hcma/repository-helpers) cloned locally
 - `REPO_HELPERS` set to its path (optional convenience): `export REPO_HELPERS=/path/to/repository-helpers`
 - fpdf dependencies installed (`pnpm install`)
+- `~/.config/user-services-host` set to your service host (or pass
+  `--condition-host` on first `setup-service` run)
 
 ## Install the Service
 
@@ -24,13 +31,13 @@ $REPO_HELPERS/scripts/setup-service
 
 This will:
 
-1. Read `etc/systemd/fpdf.service` from the repo, substitute `@@REPO_DIR@@`
-   with the actual repo path, and write the result to
+1. Read `share/systemd-unit-templates/fpdf.service` from repository-helpers,
+   substitute `@@REPO_DIR@@`, inject `ConditionHost=`, and write the result to
    `~/.config/systemd/user/fpdf.service`.
 2. Create the log directory at `~/scratch/fpdf/`.
-3. Enable systemd lingering so the service starts on boot without a login session.
+3. Enable systemd lingering on the ConditionHost machine.
 4. Run `scripts/on-deploy` — rebuilds `dist/` if the git SHA has changed.
-5. Enable and start (or restart) the service.
+5. Enable and start (or restart) the service on the ConditionHost only.
 
 ## Check Status
 
@@ -85,8 +92,8 @@ $REPO_HELPERS/scripts/dev/start-development --refresh
 
 ## Service Configuration
 
-The service template lives at
-[etc/systemd/fpdf.service](../etc/systemd/fpdf.service).
+The canonical template is
+[repository-helpers/share/systemd-unit-templates/fpdf.service](https://github.com/the-hcma/repository-helpers/blob/main/share/systemd-unit-templates/fpdf.service).
 
 Key settings:
 
@@ -99,8 +106,9 @@ Key settings:
 | `StandardOutput` | `append:~/scratch/fpdf/fpdf.log`                                            |
 | `WantedBy`       | `default.target` (user session)                                             |
 
-To change startup flags (e.g. a different port), edit
-`etc/systemd/fpdf.service` and re-run `setup-service`.
+To change startup flags (e.g. a different port), edit the template in
+repository-helpers (or a local gitignored `etc/systemd/fpdf.service` override)
+and re-run `setup-service`.
 
 ## Uninstall
 

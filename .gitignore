@@ -6,4 +6,5 @@ coverage/
 .DS_Store
 .claude/
 .worktrees/
+etc/systemd/
 .vscode/

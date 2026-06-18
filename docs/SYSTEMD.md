@@ -9,8 +9,7 @@ via lingering on the designated **ConditionHost**, and is managed using
 [repository-helpers](https://github.com/the-hcma/repository-helpers).
 
 Unit templates live in **repository-helpers**
-`share/systemd-unit-templates/` (not in this repo). Optional local overrides
-may be placed in gitignored `etc/systemd/`.
+`share/systemd-unit-templates/`.
 
 ## Prerequisites
 
@@ -107,8 +106,7 @@ Key settings:
 | `WantedBy`       | `default.target` (user session)                                             |
 
 To change startup flags (e.g. a different port), edit the template in
-repository-helpers (or a local gitignored `etc/systemd/fpdf.service` override)
-and re-run `setup-service`.
+repository-helpers and re-run `setup-service`.
 
 ## Uninstall
 

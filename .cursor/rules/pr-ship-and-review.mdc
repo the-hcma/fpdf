@@ -1,0 +1,65 @@
+---
+description: Ship a PR end-to-end — local gates, submit, agent review loop, approve + operator email
+alwaysApply: true
+---
+
+# PR ship, agent review, and operator email
+
+When the user asks to **ship**, **submit**, **open a PR**, or **follow the flow**, run this sequence in a **stack worktree** (never the primary clone). See `pr-workflow.mdc` for worktree/Graphite basics.
+
+Helper scripts live in **repository-helpers** (canonical agent review loop):
+
+```bash
+rh="${REPOSITORY_HELPERS_DIR:-$HOME/work/ai/repository-helpers}"
+"${rh}/scripts/wait-for-agent-review" …
+"${rh}/scripts/trigger-agent-review" …
+```
+
+Configure `~/.config/agent-review.env` from `${rh}/etc/agent-review.env.example` (`AGENT_REVIEW_REPORT_TO`, SMTP).
+
+Full loop (exit codes, triage, quota fallback, Bugbot): `${rh}/.cursor/rules/pr-ship-and-review.mdc`.
+
+## 1. Local quality gates (all must pass before submit)
+
+Run this repository's quality gates from the stack worktree (tests, linters, etc.).
+
+## 2. Commit and submit
+
+```bash
+gt create <stack>/<topic> -m 'feat: …'   # or gt modify -m '…'
+gt submit --publish --no-interactive
+```
+
+Wait for CI:
+
+```bash
+"${rh}/scripts/dev/post-pr-submission-checks" --pr <n>
+```
+
+Patch title/body if stale: `gh pr edit <n> --title … --body …`
+
+## 3. Agent review loop
+
+**Prerequisites:** `gh auth` must be set up for the operator running the loop. Copy
+`${rh}/etc/agent-review.env.example` to `~/.config/agent-review.env` with
+`AGENT_REVIEW_REPORT_TO` and SMTP before `complete`. `complete_ready: true` is
+reported by `"${rh}/scripts/wait-for-agent-review" check --pr <n>` (or `status`)
+JSON when CI is green and agent review threads are clear.
+
+Prefer the built-in loop:
+
+```bash
+"${rh}/scripts/wait-for-agent-review" loop --pr <n>
+```
+
+When `loop` exits **3**, triage agent threads, push fixes, re-run CI, and start the next iteration.
+
+When `check` reports `complete_ready: true`:
+
+```bash
+"${rh}/scripts/wait-for-agent-review" complete --pr <n>
+```
+
+This **approves the PR as the authenticated gh user** and emails `AGENT_REVIEW_REPORT_TO`.
+
+Do **not** add `merge-it` unless the user explicitly confirms.

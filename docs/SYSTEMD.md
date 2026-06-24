@@ -11,9 +11,11 @@ into `~/.config/systemd/user/` and mirrors the expanded unit under
 - systemd user session (`systemctl --user status` works)
 - [repository-helpers](https://github.com/the-hcma/repository-helpers) cloned locally
 - `pnpm install` completed in this repo
-- `~/.config/user-services-host` — readable label for the service host (or pass
-  `--condition-host` on first setup). On that host, setup captures machine-id into
-  `~/.config/user-services-machine-id` and injects `ConditionMachineId=` into units.
+- `~/.config/user-services-host` — short hostname label for the service host (or pass
+  `--condition-host` on first setup)
+- `~/.config/user-services-host-fqdn` — FQDN on the service host (or `--condition-host-fqdn`)
+- `~/.config/user-services-machine-id` — machine-id from `/etc/machine-id`; setup injects
+  `ConditionHost=|` guards (see repository-helpers `docs/SYSTEMD.md`)
 
 ## Install
 

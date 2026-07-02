@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.5](https://github.com/the-hcma/fpdf/compare/v1.2.4...v1.2.5) (2026-07-02)
+
+
+### Bug Fixes
+
+* align systemd template docs with etc/systemd layout ([#434](https://github.com/the-hcma/fpdf/issues/434)) ([99f00e3](https://github.com/the-hcma/fpdf/commit/99f00e3f3f43455bd988f2726381f7e4309151cd))
+* **ci:** delete Graphite MQ staging branches when PR closes ([#411](https://github.com/the-hcma/fpdf/issues/411)) ([e0b61a1](https://github.com/the-hcma/fpdf/commit/e0b61a14890ad522ebda1a202bc5902b80029ba9))
+* **ci:** harden Graphite restack guard push dedup ([#429](https://github.com/the-hcma/fpdf/issues/429)) ([902dc8c](https://github.com/the-hcma/fpdf/commit/902dc8ccf22f4e86d29bb2feba691417a2bb7e9f))
+* **ci:** key CI concurrency on head SHA ([#414](https://github.com/the-hcma/fpdf/issues/414)) ([d3806eb](https://github.com/the-hcma/fpdf/commit/d3806ebeefc445cc8597c770fdf7f4e8ea74662f))
+* **ci:** key CI concurrency on head SHA ([#447](https://github.com/the-hcma/fpdf/issues/447)) ([cd70dec](https://github.com/the-hcma/fpdf/commit/cd70decbcf771e1213049a99fe9f73d71ba6b3a6))
+* **ci:** run CI on Graphite restack (push fallback + guard dedup) ([#418](https://github.com/the-hcma/fpdf/issues/418)) ([8d6b627](https://github.com/the-hcma/fpdf/commit/8d6b627fb8fa29757ec367ef4b46cde221b980fb))
+* **ci:** skip duplicate push CI when open PR exists ([#426](https://github.com/the-hcma/fpdf/issues/426)) ([141684b](https://github.com/the-hcma/fpdf/commit/141684bd0690e298675ef54851c10a16fa0814c7))
+* restore etc/systemd unit templates ([#433](https://github.com/the-hcma/fpdf/issues/433)) ([529bba9](https://github.com/the-hcma/fpdf/commit/529bba9fc3a3116e7e4a485cd0270ec5cb7752e6))
+
 ## [1.2.4](https://github.com/the-hcma/fpdf/compare/v1.2.3...v1.2.4) (2026-06-11)
 
 

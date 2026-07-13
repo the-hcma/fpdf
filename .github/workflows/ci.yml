@@ -136,9 +136,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
 
+      # Omit `version` so the action reads package.json `packageManager` (Corepack
+      # SSOT). Do not use `version: latest` — floating tags have broken CI when
+      # npm latest moved (pnpm/action-setup#276 self-installer integrity error).
       - uses: pnpm/action-setup@v6.0.9
-        with:
-          version: latest
 
       - uses: actions/setup-node@v6.4.0
         with:

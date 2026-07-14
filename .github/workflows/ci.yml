@@ -106,7 +106,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --json files \
             -q '.files[].path' \
-            | grep -qE '^(package\.json|pnpm-lock\.yaml)$'; then
+            | grep -qE '^(package\.json|pnpm-lock\.yaml|\.github/workflows/.*\.yml)$'; then
             echo "npm_deps_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "npm_deps_changed=false" >> "$GITHUB_OUTPUT"
@@ -136,15 +136,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
 
-      # Omit `version` so the action reads package.json `packageManager` (Corepack
-      # SSOT). Do not use `version: latest` — floating tags have broken CI when
-      # npm latest moved (pnpm/action-setup#276 self-installer integrity error).
-      - uses: pnpm/action-setup@v6.0.9
-
       - uses: actions/setup-node@v6.4.0
         with:
           node-version: '24'
-          cache: 'pnpm'
+
+      # Corepack from packageManager + pnpm store cache (repository-helpers#362).
+      # Do not use pnpm/action-setup or setup-node cache: 'pnpm'.
+      - uses: the-hcma/repository-helpers/actions/setup-pnpm-corepack@cde3063aa1e030fcac59bbf215131a3bd25d7908
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

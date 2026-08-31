@@ -1,0 +1,68 @@
+---
+description: All remote/network I/O must use explicit timeouts and bounded retries
+alwaysApply: true
+---
+
+# Remote timeouts and retries
+
+Any code that talks to a network peer — the browser UI's `fetch()` calls to the
+local Express API (`src/public/app.ts`: `/doc`, `/pdf`, `/filled-pdf`,
+`/save-acroform`, `/export-canvas`, …), any future outbound HTTP from the CLI or
+server, webhooks, package indexes, `gh`/`curl` helpers — must not hang
+indefinitely and must not retry without a bound. Org template sync:
+repository-helpers#570.
+
+## Timeouts (required)
+
+- `fetch()` has **no default timeout**. Every call passes an
+  `AbortSignal.timeout(ms)` (or an `AbortController` wired to a `setTimeout`),
+  with a finite, documented default. Never `await fetch(url)` bare.
+- CLI process waits already cap with `timeout` (e.g. `timeout: 2000` in
+  `src/cli.ts`); keep an explicit timeout on every spawn/poll that can block.
+- Server-side outbound HTTP (if added) sets connect + read timeouts from a shared
+  config value — never library defaults that mean "wait forever".
+- Agent / shell wrappers that hit the network should use the helpers'
+  `--timeout` / `run_command … --timeout` patterns when available.
+
+## Retries (required when retrying)
+
+- **Retryable set:** network errors / `AbortError` from a timeout, connection
+  reset, and HTTP `408`, `429`, `502`, `503`, `504`. Everything else — including
+  `400`, `401`, `403`, `404`, `500`, `501` — is permanent; surface it, don't
+  retry.
+- Cap attempts (small fixed `N`, 2–5) **or** a total retry budget. Back off
+  between attempts (exponential with jitter). Honor `Retry-After` when the peer
+  sends it, clamped to a ceiling with a wall-clock deadline.
+- Do **not** retry a non-idempotent write (`POST /save-acroform`,
+  `POST /regenerate-acroform`, `POST /images`) unless it is safe to re-send.
+  Idempotent reads (`GET /doc`, `/pdf`, `/version`) are safe to retry in budget.
+- Log or surface a clear timeout / retry-exhaustion error to the user (toast /
+  status line / non-zero CLI exit) — never spin silently.
+
+## Anti-patterns
+
+```ts
+// bad — no timeout
+const res = await fetch('/filled-pdf', { method: 'POST', body });
+
+// bad — unbounded retry
+while (true) {
+  try { return await fetch(url); }
+  catch { /* try again forever */ }
+}
+```
+
+```ts
+// good — explicit timeout + bounded, backed-off retry of an idempotent read
+const RETRYABLE = new Set([408, 429, 502, 503, 504]);
+for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    if (res.ok || !RETRYABLE.has(res.status)) return res;   // permanent -> stop
+  } catch (e) {
+    if (!(e instanceof DOMException && e.name === 'AbortError')) throw e;
+  }
+  if (attempt === maxAttempts) throw new Error('request timed out / retries exhausted');
+  await new Promise((r) => setTimeout(r, backoffMs * 2 ** (attempt - 1)));
+}
+```

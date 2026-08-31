@@ -155,6 +155,12 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - All file paths received from the CLI or the web UI must be validated and resolved with `path.resolve` before any file system operation. Reject paths that escape the working directory.
 - No dynamic `eval`, `new Function`, or `child_process.exec` with user-controlled strings.
 - Dependencies must be reviewed before adding. Run `pnpm audit` after every `pnpm install`.
+- **Remote timeouts and bounded retries:** `.cursor/rules/remote-timeouts-retries.mdc`
+  (`alwaysApply`, org rule — template sync
+  [repository-helpers#570](https://github.com/the-hcma/repository-helpers/issues/570)).
+  Every `fetch()` passes an `AbortSignal.timeout(...)`; any retry is
+  capped/budgeted, backed off, transient-only, and never re-sends a
+  non-idempotent `POST`.
 
 ---
 

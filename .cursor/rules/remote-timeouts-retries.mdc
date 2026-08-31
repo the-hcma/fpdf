@@ -60,7 +60,12 @@ for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     if (res.ok || !RETRYABLE.has(res.status)) return res;   // permanent -> stop
   } catch (e) {
-    if (!(e instanceof DOMException && e.name === 'AbortError')) throw e;
+    // retryable: AbortError (our timeout) and a network failure (`fetch` rejects
+    // with a plain TypeError / "fetch failed" on connection reset / DNS / offline).
+    const retryable =
+      e instanceof TypeError ||
+      (e instanceof DOMException && e.name === 'AbortError');
+    if (!retryable) throw e; // programmer error / permanent -> stop
   }
   if (attempt === maxAttempts) throw new Error('request timed out / retries exhausted');
   await new Promise((r) => setTimeout(r, backoffMs * 2 ** (attempt - 1)));

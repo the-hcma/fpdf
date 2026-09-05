@@ -31,7 +31,7 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@# v7.0.1 7.0.1 # v7.0.1
 
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         id: release
@@ -106,7 +106,7 @@ jobs:
             --jq .id)
           echo "id=${check_id}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@# v7.0.1 7.0.1 # v7.0.1
         with:
           ref: ${{ steps.pr.outputs.head_sha }}
 
@@ -165,7 +165,7 @@ jobs:
     outputs:
       published_version: ${{ steps.get-version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@# v7.0.1 7.0.1 # v7.0.1
 
       - name: Verify version matches package.json (manual dispatch only)
         if: github.event_name == 'workflow_dispatch'

@@ -45,9 +45,9 @@
     "busboy": "^1.6.0",
     "commander": "15.0.0",
     "express": "^5.2.1",
-    "open": "11.0.1",
+    "open": "11.0.2",
     "pdf-lib": "^1.17.1",
-    "pdfjs-dist": "6.2.108",
+    "pdfjs-dist": "6.3.289",
     "ws": "8.21.3"
   },
   "devDependencies": {
@@ -63,7 +63,7 @@
     "eslint": "10.9.1",
     "jiti": "2.7.0",
     "prettier": "3.9.6",
-    "tsx": "4.23.12",
+    "tsx": "4.23.13",
     "typescript": "^6.0.3",
     "typescript-eslint": "8.68.0",
     "vitest": "4.1.11"

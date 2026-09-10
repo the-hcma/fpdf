@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.6](https://github.com/the-hcma/fpdf/compare/v1.2.5...v1.2.6) (2026-09-10)
+
+
+### Bug Fixes
+
+* correct stale npm-production publish-gate comment in release workflow ([#526](https://github.com/the-hcma/fpdf/issues/526)) ([5ec4501](https://github.com/the-hcma/fpdf/commit/5ec4501d2da46d529827a389324c3f995c0cf26d))
+
 ## [1.2.5](https://github.com/the-hcma/fpdf/compare/v1.2.4...v1.2.5) (2026-08-14)
 
 

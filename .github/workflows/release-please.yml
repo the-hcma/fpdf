@@ -157,7 +157,8 @@ jobs:
       )
     runs-on: ubuntu-latest
     # Must match the environment name on npm trusted publisher settings (if configured).
-    # Required reviewers were removed from this environment so publish is not gated.
+    # The npm-production environment has a required reviewer (see #519): every run
+    # of this job pauses for manual approval before the publish step executes.
     environment: npm-production
     permissions:
       contents: read

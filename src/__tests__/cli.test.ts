@@ -842,7 +842,6 @@ describe('CLI program structure', () => {
 
     it('does not warn when the doc has fillable fields', async () => {
       const { analyzePdf } = await import('../analyzer.js');
-      const { writeFile } = await import('node:fs/promises');
       const warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
       vi.mocked(analyzePdf).mockResolvedValue({
         metadata: {
@@ -883,12 +882,10 @@ describe('CLI program structure', () => {
       program.parse(['node', 'fpdf', 'analyze', 'form.pdf']);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('No fillable fields'));
-      void writeFile;
     });
 
     it('warns when the doc has no usable fields', async () => {
       const { analyzePdf } = await import('../analyzer.js');
-      const { writeFile } = await import('node:fs/promises');
       const warnSpy = vi.spyOn(logger, 'warn').mockReturnValue(undefined);
       vi.mocked(analyzePdf).mockResolvedValue({
         metadata: {
@@ -927,7 +924,6 @@ describe('CLI program structure', () => {
       program.parse(['node', 'fpdf', 'analyze', 'form.pdf']);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('No fillable fields'));
-      void writeFile;
     });
 
     it('logs a stringified error when a non-AnalyzerError is thrown', async () => {

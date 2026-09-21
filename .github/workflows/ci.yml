@@ -144,7 +144,7 @@ jobs:
 
       # Corepack from packageManager + pnpm store cache (repository-helpers#362).
       # Do not use pnpm/action-setup or setup-node cache: 'pnpm'.
-      - uses: the-hcma/repository-helpers/actions/setup-pnpm-corepack@cde3063aa1e030fcac59bbf215131a3bd25d7908
+      - uses: the-hcma/repository-helpers/actions/setup-pnpm-corepack@999844287d1b2684baa91c3e8a5b62eda9f4915e
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

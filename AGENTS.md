@@ -7,6 +7,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 ## Session Startup & Cleanup
 
 - At the **start of every agent session**, before acting from assumed conventions, read this `AGENTS.md` in full, then read every `alwaysApply: true` rule under `.cursor/rules/*.mdc` (plus any whose `globs` match files you will touch) — `AGENTS.md` and `.cursor/rules/` together are the contract. `CLAUDE.md` (a `@AGENTS.md` import) and `.github/copilot-instructions.md` are thin shims so Claude Code and Copilot reach the same guidance.
+- Markdown files you commit, this one included, use one physical line per paragraph, list item and blockquote, with no hard line breaks (see `.agents/rules/github-content-formatting.md`).
 - **Mandatory Action**: At the beginning of every session (before starting any task), run `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers).
 - This script cleans up merged worktrees, prunes stale metadata, and runs `gt sync --force` to keep your local environment synchronized with the remote.
 - By default it prompts for a new stack name and creates a new worktree under `.worktrees/<stack-name>-wt` ready for work.
@@ -156,12 +157,7 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - All file paths received from the CLI or the web UI must be validated and resolved with `path.resolve` before any file system operation. Reject paths that escape the working directory.
 - No dynamic `eval`, `new Function`, or `child_process.exec` with user-controlled strings.
 - Dependencies must be reviewed before adding. Run `pnpm audit` after every `pnpm install`.
-- **Remote timeouts and bounded retries:** `.cursor/rules/remote-timeouts-retries.mdc`
-  (`alwaysApply`, org rule — template sync
-  [repository-helpers#570](https://github.com/the-hcma/repository-helpers/issues/570)).
-  Every `fetch()` passes an `AbortSignal.timeout(...)`; any retry is
-  capped/budgeted, backed off, transient-only, and never re-sends a
-  non-idempotent `POST`.
+- **Remote timeouts and bounded retries:** `.cursor/rules/remote-timeouts-retries.mdc` (`alwaysApply`, org rule — template sync [repository-helpers#570](https://github.com/the-hcma/repository-helpers/issues/570)). Every `fetch()` passes an `AbortSignal.timeout(...)`; any retry is capped/budgeted, backed off, transient-only, and never re-sends a non-idempotent `POST`.
 
 ---
 

@@ -6,7 +6,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 
 ## Session Startup & Cleanup
 
-- At the **start of every agent session**, before acting from assumed conventions, read this `AGENTS.md` in full, then read every `alwaysApply: true` rule under `.cursor/rules/*.mdc` (plus any whose `globs` match files you will touch) — `AGENTS.md` and `.cursor/rules/` together are the contract. `CLAUDE.md` (a `@AGENTS.md` import) and `.github/copilot-instructions.md` are thin shims so Claude Code and Copilot reach the same guidance.
+- At the **start of every agent session**, before acting from assumed conventions, read this `AGENTS.md` in full, then read every `alwaysApply: true` rule under `.agents/rules/*.md` (plus any whose `globs` match files you will touch) — `AGENTS.md` and `.agents/rules/` together are the contract (`.cursor/rules/*.mdc` are Cursor injection shims only). `CLAUDE.md` (a `@AGENTS.md` import), `.github/copilot-instructions.md` and `.github/instructions/agents-rules.instructions.md` are thin shims so Claude Code and Copilot reach the same guidance.
 - Markdown files you commit, this one included, use one physical line per paragraph, list item and blockquote, with no hard line breaks (see `.agents/rules/github-content-formatting.md`).
 - **Mandatory Action**: At the beginning of every session (before starting any task), run `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers).
 - This script cleans up merged worktrees, prunes stale metadata, and runs `gt sync --force` to keep your local environment synchronized with the remote.

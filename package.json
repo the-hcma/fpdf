@@ -48,7 +48,7 @@
     "open": "11.0.4",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "6.3.289",
-    "ws": "8.21.3"
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

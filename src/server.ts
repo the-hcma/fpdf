@@ -695,7 +695,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
 
           bb.on('file', (fieldname, fileStream, info) => {
             if (fieldname === 'pdf') {
-              pdfUploadedFilename = path.basename(info.filename) || 'uploaded.pdf';
+              pdfUploadedFilename = path.basename(info.filename ?? '') || 'uploaded.pdf';
               const chunks: Buffer[] = [];
               fileStream.on('data', (chunk: Buffer) => {
                 chunks.push(chunk);
@@ -713,7 +713,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
                 }
               });
             } else if (fieldname === 'json') {
-              jsonUploadedFilename = path.basename(info.filename) || 'session.fpdf.json';
+              jsonUploadedFilename = path.basename(info.filename ?? '') || 'session.fpdf.json';
               jsonChunks = [];
               const jc = jsonChunks;
               fileStream.on('data', (chunk: Buffer) => {

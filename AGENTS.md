@@ -109,6 +109,8 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 
 > See [GRAPHITE.md](./GRAPHITE.md) for the full Graphite workflow reference (branch naming, stack creation, navigation, submission, troubleshooting, and advanced rebasing).
 
+> Merging goes through GitHub's merge queue only. Graphite's queue (the `merge-it` label) cannot merge here, because the `protect-main` ruleset requires signed commits and Graphite rewrites the branch into an unsigned squash commit. Retiring the rest of Graphite is tracked in repository-helpers#772.
+
 - This project uses **Graphite** (`gt`) for branch stacking.
 - **Worktree-per-Stack**: Every new stack/PR must be created in its own Git worktree to ensure isolation. Use `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers) — it handles worktree creation and Graphite tracking automatically.
 - All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
@@ -117,8 +119,8 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - Sync regularly via `start-development` (or `gt sync` from a **stack worktree**, never as ad-hoc writes on the main worktree); `gt restack` after upstream changes land.
 - Submit stacks with `gt submit --no-interactive` — do not open PRs manually via the GitHub UI.
 - After submitting, always mark PRs as ready for review: `gh pr ready <number>`. `gt submit --no-interactive` creates drafts by default.
-- To merge a PR, add the `merge-it` label: `gh pr edit <number> --add-label merge-it`. Never use `gh pr merge` directly.
-- **Always ask the user for confirmation before adding the `merge-it` label.** Adding it triggers an automated merge; it must not be applied without explicit user approval.
+- To merge a PR, enqueue it on GitHub's merge queue: `gh pr merge <number> --auto` (the queue's ruleset picks the squash method, so do not pass a merge-method flag). **Never** add the `merge-it` label: it enqueues Graphite, which fails on this repository's signed-commit rule. Do not force-push or rewrite a branch that is already in the queue.
+- **Always ask the user for confirmation before running `gh pr merge`.** Enqueueing triggers an automated merge; it must not be done without explicit user approval.
 - Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
 - **All commits must be GPG-signed.** Ensure `commit.gpgsign = true` is set in git config and the signing key is uploaded to GitHub (Settings → SSH and GPG keys) so commits show as "Verified".
 - Each commit must pass `pnpm run check` (type-check + lint + format check) and `pnpm test`.

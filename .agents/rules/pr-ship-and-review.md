@@ -113,4 +113,4 @@ When `check` reports `complete_ready: true`:
 
 `complete_ready` requires an agent sign-off on the current head (not a bare CodeRabbit commit status / rate-limit stub). This emails `AGENT_REVIEW_REPORT_TO`. It does **not** run `gh pr review --approve` (self-approve is skipped; merge stays an explicit operator step).
 
-Do **not** add `merge-it` unless the user explicitly confirms. Org merge path is GitHub auto-merge (`gh pr merge --auto --squash` / Enable auto-merge) when the operator asks to merge.
+Never add `merge-it` in this repository: it enqueues Graphite, which cannot merge signed-commit branches. Org merge path is GitHub auto-merge (`gh pr merge --auto` / Enable auto-merge), only after the user explicitly confirms.

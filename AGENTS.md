@@ -9,7 +9,7 @@ This file defines the non-negotiable standards for all contributors (human or AI
 - At the **start of every agent session**, before acting from assumed conventions, read this `AGENTS.md` in full, then read every `alwaysApply: true` rule under `.agents/rules/*.md` (plus any whose `globs` match files you will touch) — `AGENTS.md` and `.agents/rules/` together are the contract (`.cursor/rules/*.mdc` are Cursor injection shims only). `CLAUDE.md` (a `@AGENTS.md` import), `.github/copilot-instructions.md` and `.github/instructions/agents-rules.instructions.md` are thin shims so Claude Code and Copilot reach the same guidance.
 - Markdown files you commit, this one included, use one physical line per paragraph, list item and blockquote, with no hard line breaks (see `.agents/rules/github-content-formatting.md`).
 - **Mandatory Action**: At the beginning of every session (before starting any task), run `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers).
-- This script cleans up merged worktrees, prunes stale metadata, and runs `gt sync --force` to keep your local environment synchronized with the remote.
+- This script cleans up merged worktrees, prunes stale metadata, and runs `gh stack sync` to keep your local environment synchronized with the remote.
 - By default it prompts for a new stack name and creates a new worktree under `.worktrees/<stack-name>-wt` ready for work.
 - Pass `--resume` to instead pick up an existing in-progress worktree: it lists pending worktrees and lets you select one (or creates a new one if none exist).
 - Pass `--refresh` to pull latest main and ensure the systemd service is installed and running, then exit.
@@ -24,7 +24,7 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 - Edit, create, or delete source files, config, or lockfiles
 - Run `pnpm install`, `pnpm test`, `pnpm run check`, builds, or formatters
 - Run `dep-updater` with `--dir` pointing at the primary clone (it may fast-forward `main` and mutate git state)
-- Run `gt create`, `gt modify`, `gt submit`, `gt sync`, `gt restack`, or other Graphite/git write operations
+- Run `gh stack init`, `gh stack add`, `gh stack submit`, `gh stack sync`, `gh stack rebase`, or other stack/git write operations
 - Leave uncommitted changes, stray branches, or detached HEAD state
 
 **Always** do implementation, investigation that mutates state, and validation in a **stack worktree** under `.worktrees/<stack-name>-wt`. Pass that path to tools (`--dir`, `cd`, etc.).
@@ -107,19 +107,14 @@ The **primary clone** (repo root — first entry in `git worktree list`, usually
 
 ## Commits, Stacking & Pull Requests
 
-> See [GRAPHITE.md](./GRAPHITE.md) for the full Graphite workflow reference (branch naming, stack creation, navigation, submission, troubleshooting, and advanced rebasing).
+> See [`.agents/skills/gh-stack/SKILL.md`](https://github.com/the-hcma/repository-helpers/blob/main/.agents/skills/gh-stack/SKILL.md) in repository-helpers for the full stacking workflow, and `.agents/rules/stacking-tool.md` for the marker contract.
 
-> Merging goes through GitHub's merge queue only. Graphite's queue (the `merge-it` label) cannot merge here, because the `protect-main` ruleset requires signed commits and Graphite rewrites the branch into an unsigned squash commit. Retiring the rest of Graphite is tracked in repository-helpers#772.
-
-- This project uses **Graphite** (`gt`) for branch stacking.
-- **Worktree-per-Stack**: Every new stack/PR must be created in its own Git worktree to ensure isolation. Use `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers) — it handles worktree creation and Graphite tracking automatically.
-- All work is done in stacked branches via `gt create`, `gt modify`, and `gt submit`.
-- Never work directly on `main`. Always create a stack branch: `gt create -m "feat: description"`.
+- This project stacks branches with **GitHub Stacked PRs** (`gh stack`), as declared in `.github/stacking-tool`.
+- **Worktree-per-Stack**: Every new stack/PR must be created in its own Git worktree to ensure isolation. Use `scripts/dev/start-development` from [repository-helpers](https://github.com/the-hcma/repository-helpers) — it handles worktree creation and stack setup automatically.
+- All work is done in stacked branches via `gh stack init` / `gh stack add`, and submitted with `scripts/dev/submit-stack` (or `gh stack submit --auto --open --remote origin`).
+- Never work directly on `main`. Always create a stack branch with `gh stack init <stack>/<topic>`.
 - Keep each branch in the stack focused on exactly one logical change. Stacks should map 1-to-1 with milestones or sub-tasks from [PLAN.md](./PLAN.md).
-- Sync regularly via `start-development` (or `gt sync` from a **stack worktree**, never as ad-hoc writes on the main worktree); `gt restack` after upstream changes land.
-- Submit stacks with `gt submit --no-interactive` — do not open PRs manually via the GitHub UI.
-- After submitting, always mark PRs as ready for review: `gh pr ready <number>`. `gt submit --no-interactive` creates drafts by default.
-- To merge a PR, enqueue it on GitHub's merge queue: `gh pr merge <number> --auto` (the queue's ruleset picks the squash method, so do not pass a merge-method flag). **Never** add the `merge-it` label: it enqueues Graphite, which fails on this repository's signed-commit rule. Do not force-push or rewrite a branch that is already in the queue.
+- To merge a PR, enqueue it on GitHub's merge queue: `gh pr merge <number> --auto --squash`, or `gh stack merge --yes --squash` with no argument (from the stack's worktree; it merges the whole current stack bottom-up, so confirm that whole set with the user first) for a PR that belongs to a gh stack, which GitHub refuses to auto-merge (`scripts/dev/merge-stack --pr <n>` in repository-helpers picks the right one). Do not use the `merge-it` label. Do not force-push or rewrite a branch that is already in the queue.
 - **Always ask the user for confirmation before running `gh pr merge`.** Enqueueing triggers an automated merge; it must not be done without explicit user approval.
 - Follow **Conventional Commits**: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:`.
 - **All commits must be GPG-signed.** Ensure `commit.gpgsign = true` is set in git config and the signing key is uploaded to GitHub (Settings → SSH and GPG keys) so commits show as "Verified".

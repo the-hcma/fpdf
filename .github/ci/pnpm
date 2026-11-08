@@ -4,7 +4,9 @@
 # CI exports REPOSITORY_HELPERS_DIR through the setup-tmp-layout action; without a clone, run unchanged.
 set -euo pipefail
 self="$(realpath -- "$0")"
+readonly self
 layout_bin="${REPOSITORY_HELPERS_DIR:-$HOME/work/ai/repository-helpers}/scripts/dev/with-tmp-layout"
+readonly layout_bin
 if [[ -z "${CI_TMP_LAYOUT:-}" ]]; then
   if [[ -x "$layout_bin" ]]; then
     CI_TMP_LAYOUT=1 exec "$layout_bin" pnpm -- bash "$self" "$@"

@@ -101,7 +101,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --json files \
             -q '.files[].path' \
-            | grep -qE '^(package\.json|pnpm-lock\.yaml|\.github/(workflows|ci)/.*)$'; then
+            | grep -qE '^(package\.json|pnpm-lock\.yaml|\.github/workflows/.*\.yml|\.github/ci/[^/]+)$'; then
             echo "npm_deps_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "npm_deps_changed=false" >> "$GITHUB_OUTPUT"

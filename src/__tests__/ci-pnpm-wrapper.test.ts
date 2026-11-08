@@ -31,6 +31,7 @@ describe('.github/ci/pnpm wrapper', () => {
   } {
     const result = spawnSync('bash', [script, 'run', 'check'], {
       encoding: 'utf8',
+      timeout: 30_000,
       env: {
         PATH: `${path.join(root, 'bin')}:/usr/bin:/bin`,
         HOME: path.join(root, 'home'),

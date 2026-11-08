@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Run pnpm with its temp files and store under $TMPDIR/<project>/<branch>/pnpm (repository-helpers#832).
+# Usage: bash .github/ci/pnpm <pnpm arguments...>
+# CI exports REPOSITORY_HELPERS_DIR through the setup-tmp-layout action; without a clone, run unchanged.
+set -euo pipefail
+self="$(realpath -- "$0")"
+readonly self
+layout_bin="${REPOSITORY_HELPERS_DIR:-$HOME/work/ai/repository-helpers}/scripts/dev/with-tmp-layout"
+readonly layout_bin
+if [[ -z "${CI_TMP_LAYOUT:-}" ]]; then
+  if [[ -x "$layout_bin" ]]; then
+    CI_TMP_LAYOUT=1 exec "$layout_bin" pnpm -- bash "$self" "$@"
+  elif [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    echo 'ERROR: with-tmp-layout missing; add the setup-tmp-layout action step before this one' >&2
+    exit 1
+  fi
+fi
+exec pnpm "$@"

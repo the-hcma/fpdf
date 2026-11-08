@@ -101,7 +101,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --json files \
             -q '.files[].path' \
-            | grep -qE '^(package\.json|pnpm-lock\.yaml|\.github/workflows/.*\.yml)$'; then
+            | grep -qE '^(package\.json|pnpm-lock\.yaml|\.github/workflows/.*\.yml|\.github/ci/[^/]+)$'; then
             echo "npm_deps_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "npm_deps_changed=false" >> "$GITHUB_OUTPUT"
@@ -139,14 +139,16 @@ jobs:
       # Do not use pnpm/action-setup or setup-node cache: 'pnpm'.
       - uses: the-hcma/repository-helpers/actions/setup-pnpm-corepack@999844287d1b2684baa91c3e8a5b62eda9f4915e
 
+      - uses: the-hcma/repository-helpers/actions/setup-tmp-layout@bfee0e1f2d682e83c6207a0d6a0f7feefa576fd8
+
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bash .github/ci/pnpm install --frozen-lockfile
 
       - name: Type check + lint + format
-        run: pnpm run check
+        run: bash .github/ci/pnpm run check
 
       - name: Test
-        run: pnpm test
+        run: bash .github/ci/pnpm test
 
   secret-scan:
     name: Secret Scan

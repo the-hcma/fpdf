@@ -33,7 +33,7 @@ describe('.github/ci/pnpm wrapper', () => {
       encoding: 'utf8',
       timeout: 30_000,
       env: {
-        PATH: `${path.join(root, 'bin')}:/usr/bin:/bin`,
+        PATH: `${path.join(root, 'bin')}:/usr/bin:/bin:${process.env.PATH ?? ''}`,
         HOME: path.join(root, 'home'),
         STUB_LOG: path.join(root, 'log'),
         ...env,

@@ -85,3 +85,15 @@ describe('.github/ci/pnpm wrapper', () => {
     expect(result.log).toBe('pnpm run check\n');
   });
 });
+
+describe('release-please publish step', () => {
+  it('runs pnpm publish through with-tmp-layout and keeps the provenance flag', () => {
+    const workflow = readFileSync(
+      path.resolve(__dirname, '../../.github/workflows/release-please.yml'),
+      'utf8',
+    );
+    expect(workflow).toContain(
+      '"$REPOSITORY_HELPERS_DIR/scripts/dev/with-tmp-layout" pnpm -- pnpm publish --ignore-scripts --no-git-checks --access public --provenance',
+    );
+  });
+});

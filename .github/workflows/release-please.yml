@@ -116,17 +116,19 @@ jobs:
           node-version: '24'
       - uses: the-hcma/repository-helpers/actions/setup-pnpm-corepack@999844287d1b2684baa91c3e8a5b62eda9f4915e
 
+      - uses: the-hcma/repository-helpers/actions/setup-tmp-layout@bfee0e1f2d682e83c6207a0d6a0f7feefa576fd8
+
       - name: Install dependencies
         id: install
-        run: pnpm install --frozen-lockfile
+        run: bash .github/ci/pnpm install --frozen-lockfile
 
       - name: Type check + lint + format
         id: check_project
-        run: pnpm run check
+        run: bash .github/ci/pnpm run check
 
       - name: Test
         id: test
-        run: pnpm test
+        run: bash .github/ci/pnpm test
 
       - name: Complete ci check
         if: always()
@@ -187,12 +189,17 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - uses: the-hcma/repository-helpers/actions/setup-pnpm-corepack@999844287d1b2684baa91c3e8a5b62eda9f4915e
-          
+
+      - uses: the-hcma/repository-helpers/actions/setup-tmp-layout@bfee0e1f2d682e83c6207a0d6a0f7feefa576fd8
+
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: bash .github/ci/pnpm install --frozen-lockfile
         
       - name: Validate & Build Project
-        run: pnpm run check && pnpm run test && pnpm run build
+        run: |
+          bash .github/ci/pnpm run check
+          bash .github/ci/pnpm run test
+          bash .github/ci/pnpm run build
 
       - name: Get package version
         id: get-version

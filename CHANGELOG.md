@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/the-hcma/fpdf/compare/v1.2.6...v1.3.0) (2026-11-14)
+
+
+### Features
+
+* **ci:** lay out pnpm temp files under TMPDIR/&lt;project&gt;/&lt;branch&gt;/pnpm ([#603](https://github.com/the-hcma/fpdf/issues/603)) ([2114ec7](https://github.com/the-hcma/fpdf/commit/2114ec74af304cc03fbb74f900f68e3f0bcc5c24))
+* **ci:** run pnpm publish through the tmp layout ([#604](https://github.com/the-hcma/fpdf/issues/604)) ([40215f1](https://github.com/the-hcma/fpdf/commit/40215f1fe0a684045e2109dd3de308e2fd9334dc))
+
+
+### Bug Fixes
+
+* bump setup-pnpm-corepack pin for nested SHA-pinned cache ([#553](https://github.com/the-hcma/fpdf/issues/553)) ([2d0a4c7](https://github.com/the-hcma/fpdf/commit/2d0a4c729bc5b4762b1edd114789919a1d5777f0))
+* tolerate an undefined busboy upload filename ([#583](https://github.com/the-hcma/fpdf/issues/583)) ([63fa52b](https://github.com/the-hcma/fpdf/commit/63fa52b71cc9a32c452dd1b66dade707f7d77775))
+
 ## [1.2.6](https://github.com/the-hcma/fpdf/compare/v1.2.5...v1.2.6) (2026-09-10)
 
 
